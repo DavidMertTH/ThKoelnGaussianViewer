@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#151515" />
+    <title>Gaussian Viewer</title>
+  </head>
+  <body>
+    <main class="viewer" id="drop-zone" aria-label="Gaussian Splat Viewer">
+      <div id="viewer-canvas" class="viewer-canvas"></div>
+
+      <header class="toolbar">
+        <div class="toolbar-start">
+          <button id="menu-toggle" class="quiet-button menu-toggle" type="button" aria-expanded="false" aria-controls="scene-menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            <span>Scenes</span>
+          </button>
+        </div>
+        <div class="toolbar-actions">
+          <button id="open-button" class="open-button" type="button" title="Open splat file" aria-label="Open splat file">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <button id="menu-backdrop" class="menu-backdrop" type="button" aria-label="Close scene list" hidden></button>
+      <aside id="scene-menu" class="scene-menu" aria-label="Scenes" hidden>
+        <div class="scene-menu-header">
+          <div>
+            <h2>Scenes</h2>
+            <p id="scene-count" class="scene-count"></p>
+          </div>
+          <button id="menu-close" class="icon-button" type="button" title="Close" aria-label="Close scene list">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <div class="library-bar">
+          <span id="library-path" class="library-path"></span>
+          <button id="library-refresh" class="quiet-button library-button" type="button" title="Reload the scene folder">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6" /></svg>
+            <span>Reload</span>
+          </button>
+        </div>
+        <div id="scene-list" class="scene-list"></div>
+      </aside>
+
+      <div id="viewer-empty" class="viewer-empty" hidden>
+        <svg class="empty-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 6 15 8.5v17L24 40 9 31.5v-17z" /><path d="m9 14.5 15 8.5 15-8.5M24 23v17" /></svg>
+        <h1>No scenes yet</h1>
+        <p>Put .ply files into the scenes folder or drop one here.</p>
+      </div>
+
+      <div id="drop-overlay" class="drop-overlay" hidden>
+        <div class="drop-target">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4" /></svg>
+          <h2>Drop splat file</h2>
+        </div>
+      </div>
+
+      <div id="viewer-loading" class="viewer-loading" role="status" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="viewer-loading-detail">Loading scene …</span>
+      </div>
+
+      <div id="compare-overlay" class="compare-overlay" aria-hidden="true" hidden>
+        <img id="compare-original" alt="Original image" draggable="false" />
+        <span class="compare-label compare-label-original">Original</span>
+        <span class="compare-label compare-label-scene">3D view</span>
+      </div>
+      <div id="compare-divider" class="compare-divider" role="slider" tabindex="0" aria-label="Compare position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" title="Drag to compare" hidden>
+        <span class="compare-grip" aria-hidden="true"><i></i><i></i></span>
+      </div>
+
+      <footer class="viewer-footer">
+        <span id="viewer-hint" class="viewer-hint">Drag to orbit · Scroll to zoom</span>
+        <nav id="scene-stepper" class="scene-stepper" aria-label="Scene navigation" hidden>
+          <button id="scene-previous" class="carousel-arrow" type="button" title="Previous scene" aria-label="Previous scene">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+          </button>
+          <span id="scene-position" class="scene-position" aria-live="polite"></span>
+          <button id="scene-next" class="carousel-arrow" type="button" title="Next scene" aria-label="Next scene">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+        </nav>
+        <div class="view-actions">
+          <select id="mode-select" class="quiet-button mode-select" title="View mode" aria-label="View mode">
+            <option value="image">Photo</option>
+            <option value="hemisphere">180°</option>
+            <option value="panorama">360°</option>
+          </select>
+          <button id="compare-button" class="quiet-button compare-button" type="button" title="Compare original and 3D view" aria-label="Compare original and 3D view" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4 6h5v12H4zM15 6h5v12h-5z" /></svg>
+            <span>Compare</span>
+          </button>
+          <button id="vr-button" class="quiet-button" type="button" title="View in VR" aria-label="View in VR" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 7h13A2.5 2.5 0 0 1 21 9.5v5a2.5 2.5 0 0 1-2.5 2.5h-3.3l-1.7-2.4a1.8 1.8 0 0 0-3 0L8.8 17H5.5A2.5 2.5 0 0 1 3 14.5v-5A2.5 2.5 0 0 1 5.5 7z" /><circle cx="8" cy="12" r="1.6" /><circle cx="16" cy="12" r="1.6" /></svg>
+            <span>VR</span>
+          </button>
+          <button id="reset-view" class="quiet-button" type="button" title="Reset view" aria-label="Reset view">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6" /></svg>
+            <span>Reset</span>
+          </button>
+          <a id="download-link" class="quiet-button" href="#" title="Download splat" aria-label="Download splat" download hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4" /></svg>
+            <span>Download</span>
+          </a>
+        </div>
+      </footer>
+
+      <div id="toast" class="toast" role="status" hidden></div>
+    </main>
+    <input id="file-input" type="file" accept=".ply,.spz,.splat,.ksplat" hidden />
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
