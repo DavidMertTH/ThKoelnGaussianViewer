@@ -38,6 +38,10 @@
         </div>
         <div class="library-bar">
           <span id="library-path" class="library-path"></span>
+          <button class="quiet-button library-button folder-button" type="button" title="Choose scene folder">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+            <span>Folder</span>
+          </button>
           <button id="library-refresh" class="quiet-button library-button" type="button" title="Reload the scene folder">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6" /></svg>
             <span>Reload</span>
@@ -49,7 +53,11 @@
       <div id="viewer-empty" class="viewer-empty" hidden>
         <svg class="empty-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 6 15 8.5v17L24 40 9 31.5v-17z" /><path d="m9 14.5 15 8.5 15-8.5M24 23v17" /></svg>
         <h1>No scenes yet</h1>
-        <p>Put .ply files into the scenes folder or drop one here.</p>
+        <p>Choose a folder with splat files or drop one here.</p>
+        <button class="quiet-button folder-button" type="button" title="Choose scene folder">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          <span>Choose folder</span>
+        </button>
       </div>
 
       <div id="drop-overlay" class="drop-overlay" hidden>
@@ -73,23 +81,32 @@
         <span class="compare-grip" aria-hidden="true"><i></i><i></i></span>
       </div>
 
+      <div id="depth-legend" class="depth-legend" role="img" aria-label="Depth legend" hidden>
+        <div class="depth-legend-head"><span>Depth</span><span>near → far</span></div>
+        <div class="depth-legend-bar"></div>
+        <div class="depth-legend-ticks"><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="depth-legend-unit">Depth from the start view · scene units</div>
+      </div>
+
       <footer class="viewer-footer">
         <span id="viewer-hint" class="viewer-hint">Drag to orbit · Scroll to zoom</span>
-        <nav id="scene-stepper" class="scene-stepper" aria-label="Scene navigation" hidden>
-          <button id="scene-previous" class="carousel-arrow" type="button" title="Previous scene" aria-label="Previous scene">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-          </button>
-          <span id="scene-position" class="scene-position" aria-live="polite"></span>
-          <button id="scene-next" class="carousel-arrow" type="button" title="Next scene" aria-label="Next scene">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
-          </button>
-        </nav>
+        <div class="scene-info">
+          <span id="scene-name" class="scene-name" aria-live="polite"></span>
+          <nav id="scene-stepper" class="scene-stepper" aria-label="Scene navigation" hidden>
+            <button id="scene-previous" class="carousel-arrow" type="button" title="Previous scene" aria-label="Previous scene">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            </button>
+            <span id="scene-position" class="scene-position" aria-live="polite"></span>
+            <button id="scene-next" class="carousel-arrow" type="button" title="Next scene" aria-label="Next scene">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </nav>
+        </div>
         <div class="view-actions">
-          <select id="mode-select" class="quiet-button mode-select" title="View mode" aria-label="View mode">
-            <option value="image">Photo</option>
-            <option value="hemisphere">180°</option>
-            <option value="panorama">360°</option>
-          </select>
+          <button id="depth-button" class="quiet-button depth-button" type="button" title="Show depth map" aria-label="Show depth map" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 12.5 9 5 9-5M3 17l9 5 9-5" /></svg>
+            <span>Depth</span>
+          </button>
           <button id="compare-button" class="quiet-button compare-button" type="button" title="Compare original and 3D view" aria-label="Compare original and 3D view" aria-pressed="false" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4 6h5v12H4zM15 6h5v12h-5z" /></svg>
             <span>Compare</span>

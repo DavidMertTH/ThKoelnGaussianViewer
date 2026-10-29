@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { PackedSplats, SparkRenderer, SparkXr, SplatLoader, SplatMesh } from '@sparkjsdev/spark';
+import { PackedSplats, SparkRenderer, SparkXr, SplatLoader, SplatMesh, dyno } from '@sparkjsdev/spark';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -14,7 +14,8 @@ const compareButton = $('#compare-button');
 const compareOverlay = $('#compare-overlay');
 const compareOriginal = $('#compare-original');
 const compareDivider = $('#compare-divider');
-const modeSelect = $('#mode-select');
+const depthButton = $('#depth-button');
+const depthLegend = $('#depth-legend');
 const loadingPanel = $('#viewer-loading');
 const loadingDetail = $('#viewer-loading-detail');
 const dropOverlay = $('#drop-overlay');
@@ -31,7 +32,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setClearColor(0x151515, 0);
 stage.appendChild(renderer.domElement);
 renderer.domElement.tabIndex = 0;
-renderer.domElement.setAttribute('aria-label', '3D view');
+renderer.domElement.setAttribute('aria-label', '3D view. Drag to orbit, scroll to zoom.');
 scene.add(new SparkRenderer({ renderer }));
 const xrRig = new THREE.Group();
 xrRig.add(camera);
@@ -59,7 +60,6 @@ const collapsedFolders = new Set((() => {
     return [];
   }
 })());
-const modeOverrides = new Map();
 let activeSceneId = null;
 let currentMesh = null;
 let comparePosition = 50;
@@ -68,69 +68,10 @@ let compareEnabled = false;
 let loadVersion = 0;
 let toastTimer = null;
 let dragDepth = 0;
-let viewerMode = 'image';
-let viewerCoverage = 360;
+let depthEnabled = false;
 const lookDirection = new THREE.Vector3();
-const movement = new THREE.Vector3();
-const pressedKeys = new Set();
-const movementKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight']);
-let lastFrameTime = null;
-let movementFast = false;
 let xrSavedView = null;
 let xrButtonsHeld = new Set();
-
-function stopMovement() {
-  pressedKeys.clear();
-  movementFast = false;
-  lastFrameTime = null;
-}
-
-function movePanoramaCamera(deltaSeconds) {
-  if (viewerMode !== 'panorama' || !currentMesh || document.activeElement !== renderer.domElement) return;
-  const forward = Number(pressedKeys.has('KeyW')) - Number(pressedKeys.has('KeyS'));
-  const sideways = Number(pressedKeys.has('KeyD')) - Number(pressedKeys.has('KeyA'));
-  const vertical = Number(pressedKeys.has('KeyE')) - Number(pressedKeys.has('KeyQ'));
-  camera.getWorldDirection(lookDirection);
-  const yaw = Math.atan2(lookDirection.x, -lookDirection.z);
-  movement.set(
-    Math.sin(yaw) * forward + Math.cos(yaw) * sideways,
-    vertical,
-    -Math.cos(yaw) * forward + Math.sin(yaw) * sideways,
-  );
-  if (movement.lengthSq() === 0) return;
-  const speed = movementFast ? 6 : 2;
-  movement.normalize().multiplyScalar(speed * deltaSeconds);
-  camera.position.add(movement);
-  controls.target.add(movement);
-}
-
-function rotatePanoramaView(yawDelta, pitchDelta) {
-  const position = camera.position.clone();
-  const target = controls.target.clone();
-  const damping = controls.enableDamping;
-  controls.enableDamping = false;
-  controls.update();
-  camera.position.copy(position);
-  controls.target.copy(target);
-  const distance = controls.getDistance();
-  lookDirection.subVectors(controls.target, camera.position).normalize();
-  let yaw = Math.atan2(lookDirection.x, -lookDirection.z) + yawDelta;
-  const pitch = THREE.MathUtils.clamp(
-    Math.asin(THREE.MathUtils.clamp(lookDirection.y, -1, 1)) + pitchDelta,
-    -Math.PI / 2 + 0.01,
-    Math.PI / 2 - 0.01,
-  );
-  if (viewerCoverage === 180) yaw = THREE.MathUtils.clamp(yaw, -Math.PI / 2, Math.PI / 2);
-  const horizontal = Math.cos(pitch);
-  lookDirection.set(
-    Math.sin(yaw) * horizontal,
-    Math.sin(pitch),
-    -Math.cos(yaw) * horizontal,
-  );
-  controls.target.copy(camera.position).addScaledVector(lookDirection, distance);
-  controls.update();
-  controls.enableDamping = damping;
-}
 
 const FOCUS_CELLS = 9;
 const FOCUS_REACH = 0.03;
@@ -150,81 +91,107 @@ function measureFocusDistance(packedSplats) {
   return depths.length ? depths[Math.floor(depths.length / 2)] : null;
 }
 
+const DEPTH_SAMPLES = 20000;
+const TURBO_RANGE = [0.08, 0.95];
+const TURBO = [
+  [0.13572138, 4.6153926, -42.66032258, 132.13108234, -152.94239396, 59.28637943],
+  [0.09140261, 2.19418839, 4.84296658, -14.18503333, 4.27729857, 2.82956604],
+  [0.1066733, 12.64194608, -60.58204836, 110.36276771, -89.90310912, 27.34824973],
+];
+const turboGlsl = `vec3 viewerTurbo(float t) {
+  float x = mix(${TURBO_RANGE.join(', ')}, t);
+  vec4 v4 = vec4(1.0, x, x * x, x * x * x);
+  vec2 v2 = v4.zw * v4.z;
+  return vec3(${TURBO.map((k) => `dot(v4, vec4(${k.slice(0, 4).join(', ')})) + dot(v2, vec2(${k.slice(4).join(', ')}))`).join(',\n    ')});
+}`;
+
+function turbo(t) {
+  const x = THREE.MathUtils.lerp(...TURBO_RANGE, t);
+  const powers = [1, x, x ** 2, x ** 3, x ** 4, x ** 5];
+  return TURBO.map((k) => Math.round(THREE.MathUtils.clamp(k.reduce((sum, c, i) => sum + c * powers[i], 0), 0, 1) * 255));
+}
+
+function depthModifier(view, [near, far]) {
+  const e = view.elements;
+  return dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
+    const { center } = dyno.splitGsplat(gsplat).outputs;
+    const { rgb } = dyno.dyno({
+      inTypes: { center: 'vec3', axis: 'vec4', near: 'float', far: 'float' },
+      outTypes: { rgb: 'vec3' },
+      inputs: {
+        center,
+        axis: dyno.dynoConst('vec4', [-e[2], -e[6], -e[10], -e[14]]),
+        near: dyno.dynoConst('float', near),
+        far: dyno.dynoConst('float', far),
+      },
+      globals: () => [turboGlsl],
+      statements: ({ inputs, outputs }) => [
+        `float depth = dot(vec4(${inputs.center}, 1.0), ${inputs.axis});`,
+        `${outputs.rgb} = viewerTurbo(clamp((${inputs.far} - depth) / max(${inputs.far} - ${inputs.near}, 1e-6), 0.0, 1.0));`,
+      ],
+    }).outputs;
+    return { gsplat: dyno.combineGsplat({ gsplat, rgb }) };
+  });
+}
+
+function rememberStartView(mesh) {
+  camera.updateMatrixWorld();
+  mesh.updateMatrixWorld();
+  mesh.userData.startView = new THREE.Matrix4().multiplyMatrices(camera.matrixWorldInverse, mesh.matrixWorld);
+  mesh.userData.startClip = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, mesh.userData.startView);
+}
+
+function measureDepthRange(mesh) {
+  const m = mesh.userData.startClip.elements;
+  const stride = Math.max(1, Math.floor(mesh.packedSplats.numSplats / DEPTH_SAMPLES));
+  const depths = [];
+  mesh.packedSplats.forEachSplat((index, { x, y, z }, scales, quaternion, opacity) => {
+    if (index % stride || opacity < 0.2) return;
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (w <= 0) return;
+    if (Math.abs(m[0] * x + m[4] * y + m[8] * z + m[12]) <= w && Math.abs(m[1] * x + m[5] * y + m[9] * z + m[13]) <= w) depths.push(w);
+  });
+  if (depths.length < 10) return [0, 1];
+  depths.sort((a, b) => a - b);
+  const near = depths[Math.floor(depths.length * 0.02)];
+  return [near, Math.max(depths[Math.floor(depths.length * 0.98)], near + 1e-3)];
+}
+
+function formatDepth(value, step) {
+  return value.toFixed(THREE.MathUtils.clamp(Math.round(-Math.log10(step)) + 1, 0, 4));
+}
+
+function setDepthEnabled(enabled) {
+  depthEnabled = enabled;
+  depthButton.setAttribute('aria-pressed', String(enabled));
+  depthLegend.hidden = !enabled || !currentMesh;
+  if (!currentMesh) return;
+  if (enabled) {
+    const range = currentMesh.userData.depthRange ??= measureDepthRange(currentMesh);
+    const ticks = depthLegend.querySelectorAll('.depth-legend-ticks span');
+    const step = (range[1] - range[0]) / (ticks.length - 1);
+    ticks.forEach((tick, index) => { tick.textContent = formatDepth(range[0] + step * index, step); });
+    currentMesh.objectModifier = depthModifier(currentMesh.userData.startView, range);
+  } else {
+    currentMesh.objectModifier = undefined;
+  }
+  currentMesh.updateGenerator();
+}
+
+depthLegend.querySelector('.depth-legend-bar').style.background = `linear-gradient(90deg, ${
+  Array.from({ length: 11 }, (_, i) => `rgb(${turbo(1 - i / 10).join(' ')}) ${i * 10}%`).join(', ')
+})`;
+
 function resetCamera() {
-  stopMovement();
   const damping = controls.enableDamping;
   controls.enableDamping = false;
   controls.update();
   camera.position.set(0, 0, 0);
   camera.up.set(0, 1, 0);
-  camera.fov = viewerMode === 'panorama' ? 75 : 53;
-  camera.updateProjectionMatrix();
-  const focus = viewerMode === 'image' ? currentMesh?.userData.focusDistance : null;
-  controls.target.set(0, 0, -(focus || 3));
+  controls.target.set(0, 0, -(currentMesh?.userData.focusDistance || 3));
   controls.update();
   controls.enableDamping = damping;
 }
-
-function setViewerMode(mode) {
-  viewerCoverage = mode === 'hemisphere' ? 180 : 360;
-  viewerMode = ['panorama', 'hemisphere'].includes(mode) ? 'panorama' : 'image';
-  modeSelect.value = ['panorama', 'hemisphere'].includes(mode) ? mode : 'image';
-  controls.minAzimuthAngle = viewerCoverage === 180 ? -Math.PI / 2 : -Infinity;
-  controls.maxAzimuthAngle = viewerCoverage === 180 ? Math.PI / 2 : Infinity;
-  stage.classList.toggle('panorama', viewerMode === 'panorama');
-  stage.classList.remove('dragging');
-  $('#viewer-hint').textContent = viewerMode === 'panorama'
-    ? 'Drag to tilt · Arrow keys to turn · Scroll to zoom'
-    : 'Drag to orbit · Scroll to zoom';
-  const help = viewerMode === 'panorama'
-    ? 'Drag to tilt the scene. Arrow keys turn the view; Shift turns faster. W/S forward and back, A/D sideways, Q/E up and down. Scroll to zoom.'
-    : 'Drag to orbit, scroll to zoom.';
-  $('#viewer-hint').title = help;
-  renderer.domElement.setAttribute('aria-label', `3D view. ${help}`);
-  resetCamera();
-}
-
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  renderer.domElement.focus({ preventScroll: true });
-  movementFast = event.shiftKey;
-});
-controls.addEventListener('start', () => {
-  stage.classList.add('dragging');
-});
-controls.addEventListener('end', () => {
-  stage.classList.remove('dragging');
-});
-
-renderer.domElement.addEventListener('keydown', (event) => {
-  if (viewerMode !== 'panorama' || !currentMesh || renderer.xr.isPresenting) return;
-  if (event.ctrlKey || event.altKey || event.metaKey) {
-    stopMovement();
-    return;
-  }
-  if (event.code.startsWith('Arrow')) {
-    event.preventDefault();
-    if (event.repeat) return;
-    const angle = THREE.MathUtils.degToRad(event.shiftKey ? 12 : 4);
-    if (event.code === 'ArrowLeft') rotatePanoramaView(-angle, 0);
-    else if (event.code === 'ArrowRight') rotatePanoramaView(angle, 0);
-    else if (event.code === 'ArrowUp') rotatePanoramaView(0, angle);
-    else if (event.code === 'ArrowDown') rotatePanoramaView(0, -angle);
-    return;
-  }
-  if (!movementKeys.has(event.code)) return;
-  event.preventDefault();
-  movementFast = event.shiftKey;
-  pressedKeys.add(event.code);
-});
-renderer.domElement.addEventListener('keyup', (event) => {
-  movementFast = event.shiftKey;
-  pressedKeys.delete(event.code);
-});
-renderer.domElement.addEventListener('blur', stopMovement);
-window.addEventListener('blur', stopMovement);
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) stopMovement();
-});
 
 function resize() {
   if (renderer.xr.isPresenting) return;
@@ -279,7 +246,6 @@ const sparkXr = new SparkXr({
 });
 
 renderer.xr.addEventListener('sessionstart', () => {
-  stopMovement();
   setSceneMenuOpen(false);
   xrSavedView = { sceneId: activeSceneId, position: camera.position.clone(), target: controls.target.clone() };
   placeXrRig();
@@ -311,15 +277,12 @@ renderer.xr.addEventListener('sessionend', () => {
 resetCamera();
 new ResizeObserver(resize).observe(stage);
 resize();
-renderer.setAnimationLoop((time) => {
-  const deltaSeconds = lastFrameTime === null ? 0 : Math.min(0.1, Math.max(0, (time - lastFrameTime) / 1000));
-  lastFrameTime = time;
+renderer.setAnimationLoop(() => {
   if (renderer.xr.isPresenting) {
     sparkXr.updateControllers(camera);
     handleXrButtons();
-  } else {
-    movePanoramaCamera(deltaSeconds);
-    if (controls.enabled) controls.update();
+  } else if (controls.enabled) {
+    controls.update();
   }
   renderer.render(scene, camera);
 });
@@ -337,16 +300,6 @@ function formatBytes(bytes) {
   return bytes >= 1e6 ? `${(bytes / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 })} MB` : `${Math.ceil(bytes / 1e3)} kB`;
 }
 
-function sceneMode(item) {
-  return modeOverrides.get(item.id) || item.mode || 'image';
-}
-
-function sceneKindText(item) {
-  const mode = sceneMode(item);
-  const coverage = mode === 'panorama' ? '360°' : mode === 'hemisphere' ? '180°' : 'Photo';
-  return [coverage, formatBytes(item.sizeBytes)].join(' · ');
-}
-
 function allScenes() {
   return [...scenes, ...localScenes];
 }
@@ -357,6 +310,9 @@ function updateSceneActions(item) {
   download.href = item.plyUrl;
   download.download = item.fileName;
   compareButton.hidden = !item.imageUrl;
+  depthButton.hidden = false;
+  $('#scene-name').textContent = item.name;
+  $('#scene-name').title = item.name;
   if (item.imageUrl) compareOriginal.src = item.imageUrl;
   else compareOriginal.removeAttribute('src');
   if (!item.imageUrl) setCompareEnabled(false);
@@ -400,7 +356,7 @@ function sceneRow(item, depth = 0) {
   name.textContent = item.name;
   const detail = document.createElement('span');
   detail.className = 'scene-row-kind';
-  detail.textContent = sceneKindText(item);
+  detail.textContent = formatBytes(item.sizeBytes);
   copy.append(name, detail);
   button.append(copy);
   button.addEventListener('click', () => {
@@ -518,12 +474,57 @@ function stepScene(direction) {
   void selectScene(sceneOrder[nextIndex]);
 }
 
+function showLibrary(data) {
+  library = data;
+  scenes = library.tree ? folderScenes(library.tree) : [];
+  renderSceneList();
+}
+
 async function fetchScenes() {
   const response = await fetch('/api/scenes', { cache: 'no-store' });
   if (!response.ok) throw new Error('Could not load scenes.');
-  library = await response.json();
-  scenes = library.tree ? folderScenes(library.tree) : [];
-  renderSceneList();
+  showLibrary(await response.json());
+}
+
+function clearScene() {
+  loadVersion += 1;
+  loadingPanel.hidden = true;
+  if (currentMesh) {
+    scene.remove(currentMesh);
+    currentMesh.dispose?.();
+    currentMesh = null;
+  }
+  activeSceneId = null;
+  $('#download-link').hidden = true;
+  compareButton.hidden = true;
+  depthButton.hidden = true;
+  $('#scene-name').textContent = '';
+  setCompareEnabled(false);
+  setDepthEnabled(depthEnabled);
+  updateSceneListSelection();
+  $('#viewer-empty').hidden = false;
+}
+
+async function chooseFolder() {
+  const buttons = document.querySelectorAll('.folder-button');
+  for (const button of buttons) button.disabled = true;
+  try {
+    const response = await fetch('/api/folder', { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not choose a folder.');
+    if (!data.changed) return;
+    showLibrary(data);
+    if (scenes.length) {
+      activeSceneId = null;
+      await selectScene(scenes[0].id);
+    } else {
+      clearScene();
+    }
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    for (const button of buttons) button.disabled = false;
+  }
 }
 
 async function loadPackedSplats(item, version) {
@@ -568,7 +569,9 @@ async function selectScene(id) {
     activeSceneId = id;
     updateSceneListSelection();
     updateSceneActions(item);
-    setViewerMode(sceneMode(item));
+    resetCamera();
+    rememberStartView(mesh);
+    if (depthEnabled) setDepthEnabled(true);
     if (renderer.xr.isPresenting) resetXrRig();
     loadingPanel.hidden = true;
     return true;
@@ -593,7 +596,6 @@ function openLocalFile(file) {
     localScenes.push({
       id,
       name: file.name.replace(/\.[^.]+$/, ''),
-      mode: 'image',
       sizeBytes: file.size,
       plyUrl: URL.createObjectURL(file),
       fileName: file.name,
@@ -611,20 +613,15 @@ fileInput.addEventListener('change', () => {
   openLocalFile(fileInput.files?.[0]);
   fileInput.value = '';
 });
-modeSelect.addEventListener('change', () => {
-  if (activeSceneId) {
-    modeOverrides.set(activeSceneId, modeSelect.value);
-    renderSceneList();
-  }
-  setViewerMode(modeSelect.value);
-});
 menuToggle.addEventListener('click', () => setSceneMenuOpen(sceneMenu.hidden));
 $('#menu-close').addEventListener('click', () => { setSceneMenuOpen(false); menuToggle.focus(); });
 menuBackdrop.addEventListener('click', () => setSceneMenuOpen(false));
 $('#library-refresh').addEventListener('click', () => {
   fetchScenes().catch((error) => showToast(error.message, true));
 });
+for (const button of document.querySelectorAll('.folder-button')) button.addEventListener('click', () => chooseFolder());
 compareButton.addEventListener('click', () => setCompareEnabled(!compareEnabled));
+depthButton.addEventListener('click', () => setDepthEnabled(!depthEnabled));
 compareDivider.addEventListener('pointerdown', (event) => {
   compareDragging = true;
   compareDivider.setPointerCapture(event.pointerId);
