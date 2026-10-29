@@ -145,7 +145,7 @@ function launchBrowser(url) {
   const [command, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
     : process.platform === 'darwin' ? ['open', [url]]
       : ['xdg-open', [url]];
-  spawn(command, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+  spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
 }
 
 if (!existsSync(join(dist, 'index.html'))) {

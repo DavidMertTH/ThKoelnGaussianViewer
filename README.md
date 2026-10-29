@@ -5,13 +5,13 @@ A local browser viewer for Gaussian splat scenes (`.ply`, `.spz`, `.splat`, `.ks
 ## Requirements
 
 - Node.js 22 or newer (https://nodejs.org)
-- A browser with WebGL 2 (Chrome, Edge or Firefox)
+- A browser with WebGL 2 (Chrome, Edge, Firefox or Safari)
 
 ## Installation
 
 Windows: double-click `install.cmd`.
 
-Linux:
+macOS and Linux: open a terminal in this folder and run
 
 ```sh
 ./install.sh
@@ -22,6 +22,8 @@ This installs the dependencies and builds the viewer. On Linux it also adds "Gau
 ## Starting
 
 Windows: double-click `Start Viewer.cmd`.
+
+macOS: double-click `Start Viewer.command`. If macOS refuses to open it because it was downloaded from the internet, right-click it, choose Open and confirm once.
 
 Linux: open "Gaussian Viewer" from the application menu, or run `./start.sh`.
 

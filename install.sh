@@ -13,7 +13,7 @@ if [[ "$(uname)" == Linux ]]; then
 [Desktop Entry]
 Type=Application
 Name=Gaussian Viewer
-Exec="$PWD/start.sh"
+Exec=env "PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin" "$PWD/start.sh"
 Path=$PWD
 Icon=applications-graphics
 Terminal=true
