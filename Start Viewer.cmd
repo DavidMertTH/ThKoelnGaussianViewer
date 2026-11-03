@@ -7,7 +7,7 @@ where node >nul 2>nul || (
 if not exist dist\index.html (
     call install.cmd quiet || goto failed
 )
-node server.js --open
+node server.js --open %*
 if errorlevel 1 goto failed
 exit /b 0
 

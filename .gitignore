@@ -3,3 +3,5 @@ dist/
 scenes/*
 !scenes/.gitkeep
 settings.json
+certs/
+thumbnails/

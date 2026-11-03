@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#151515" />
+    <title>Scenes · Gaussian Viewer</title>
+    <link rel="stylesheet" href="/src/pages.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <a class="page-home" href="/" title="Start page">
+        <img src="/src/cgg-logo-small.webp" width="278" height="132" alt="Computer Graphics Group" draggable="false" />
+      </a>
+      <div class="page-title">
+        <h1>Scenes</h1>
+        <p id="scene-count" class="scene-count"></p>
+      </div>
+      <div class="page-actions">
+        <div id="rating-filter" class="rating-filter" role="group" aria-label="Show scenes by rating"></div>
+        <label class="sort-select" title="Sort scenes">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16m-3-3 3 3 3-3M17 20V4m-3 3 3-3 3 3" /></svg>
+          <select id="sort-select" aria-label="Sort scenes"></select>
+        </label>
+        <a id="thumbnails-link" class="quiet-button" href="/viewer.html?thumbnails" title="Open every scene without a thumbnail once and save its picture" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z" /><path d="m4 16 5-5 4 4 2-2 5 5" /><circle cx="15.5" cy="9" r="1.5" /></svg>
+          <span id="thumbnails-label">Thumbnails</span>
+        </a>
+        <button id="folder-button" class="quiet-button" type="button" title="Choose scene folder" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          <span>Folder</span>
+        </button>
+        <button id="reload-button" class="quiet-button" type="button" title="Reload the scene folder">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6" /></svg>
+          <span>Reload</span>
+        </button>
+      </div>
+      <label class="search-bar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
+        <input id="scene-search" type="search" placeholder="Search scenes" aria-label="Search scenes" autocomplete="off" spellcheck="false" />
+      </label>
+    </header>
+    <main id="scene-browser" class="scene-browser" aria-live="polite">
+      <p class="browser-message">Loading scenes …</p>
+    </main>
+    <script type="module" src="/src/scenes.js"></script>
+  </body>
+</html>

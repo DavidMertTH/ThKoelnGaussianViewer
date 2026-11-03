@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#151515" />
+    <title>Viewer · Gaussian Viewer</title>
+  </head>
+  <body>
+    <main class="viewer" id="drop-zone" aria-label="Gaussian Splat Viewer">
+      <div id="viewer-canvas" class="viewer-canvas"></div>
+
+      <header class="toolbar">
+        <div class="toolbar-start">
+          <a class="quiet-button menu-toggle" href="/scenes.html" title="All scenes">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" /></svg>
+            <span>Scenes</span>
+          </a>
+        </div>
+        <a class="brand-link" href="/" title="Start page">
+          <img class="brand-logo" src="/src/cgg-logo-small.webp" alt="Computer Graphics Group" draggable="false" />
+        </a>
+        <div class="toolbar-actions">
+          <div id="fps-meter" class="fps-meter" aria-hidden="true" hidden>
+            <span><b id="fps-value">–</b><span id="fps-timing"> FPS</span></span>
+            <span id="fps-detail" class="fps-meter-detail"></span>
+            <span id="fps-gpu" class="fps-meter-detail"></span>
+            <span id="fps-cpu" class="fps-meter-detail"></span>
+          </div>
+          <button id="open-button" class="open-button" type="button" title="Open splat file" aria-label="Open splat file">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="viewer-empty" class="viewer-empty" hidden>
+        <svg class="empty-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="m24 6 15 8.5v17L24 40 9 31.5v-17z" /><path d="m9 14.5 15 8.5 15-8.5M24 23v17" /></svg>
+        <h1>No scenes yet</h1>
+        <p>Choose a folder with splat files or drop one here.</p>
+        <button class="quiet-button folder-button" type="button" title="Choose scene folder">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          <span>Choose folder</span>
+        </button>
+      </div>
+
+      <div id="drop-overlay" class="drop-overlay" hidden>
+        <div class="drop-target">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4" /></svg>
+          <h2>Drop splat file</h2>
+        </div>
+      </div>
+
+      <div id="viewer-loading" class="viewer-loading" role="status" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="viewer-loading-detail">Loading scene …</span>
+      </div>
+
+      <div id="compare-overlay" class="compare-overlay" aria-hidden="true" hidden>
+        <img id="compare-original" alt="Original image" draggable="false" />
+        <span class="compare-label compare-label-original">Original</span>
+        <span class="compare-label compare-label-scene">3D view</span>
+      </div>
+      <div id="compare-divider" class="compare-divider" role="slider" tabindex="0" aria-label="Compare position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" title="Drag to compare" hidden>
+        <span class="compare-grip" aria-hidden="true"><i></i><i></i></span>
+      </div>
+
+      <div id="depth-legend" class="depth-legend" role="img" aria-label="Depth legend" hidden>
+        <div class="depth-legend-head"><span>Depth</span><span>near → far</span></div>
+        <div class="depth-legend-bar"></div>
+        <div class="depth-legend-ticks"><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="depth-legend-unit">Depth from the start view · scene units</div>
+      </div>
+
+      <footer class="viewer-footer">
+        <span id="viewer-hint" class="viewer-hint">Drag to orbit · Scroll to zoom</span>
+        <div class="scene-info">
+          <span id="scene-name" class="scene-name" aria-live="polite"></span>
+          <div id="scene-rating" class="scene-rating" role="group" aria-label="Rating" hidden>
+            <button class="rating-star" type="button" data-rating="1" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <button class="rating-star" type="button" data-rating="2" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <button class="rating-star" type="button" data-rating="3" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+          </div>
+          <nav id="scene-stepper" class="scene-stepper" aria-label="Scene navigation" hidden>
+            <button id="scene-previous" class="carousel-arrow" type="button" title="Previous scene" aria-label="Previous scene">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            </button>
+            <span id="scene-position" class="scene-position" aria-live="polite"></span>
+            <button id="scene-next" class="carousel-arrow" type="button" title="Next scene" aria-label="Next scene">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </nav>
+        </div>
+        <div class="view-actions">
+          <button id="renderer-button" class="quiet-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z" /><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" /></svg>
+            <span>Compute</span>
+          </button>
+          <label id="offset-control" class="offset-control" title="Push the scene away from the viewer, far parts further" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V5m-5 5 5-5 5 5M5 3h14" /></svg>
+            <span class="offset-label">Distance</span>
+            <input id="offset-slider" type="range" min="0" max="3" step="0.01" value="0" aria-label="Push the scene away from the viewer" />
+            <output id="offset-value" class="offset-value" for="offset-slider">×1.00</output>
+          </label>
+          <button id="depth-button" class="quiet-button depth-button" type="button" title="Show depth map" aria-label="Show depth map" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 12.5 9 5 9-5M3 17l9 5 9-5" /></svg>
+            <span>Depth</span>
+          </button>
+          <button id="compare-button" class="quiet-button compare-button" type="button" title="Compare original and 3D view" aria-label="Compare original and 3D view" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4 6h5v12H4zM15 6h5v12h-5z" /></svg>
+            <span>Compare</span>
+          </button>
+          <button id="anaglyph-button" class="quiet-button toggle-button" type="button" title="Red-cyan 3D for classic 3D glasses (red on the left eye)" aria-label="Red-cyan 3D" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 9.5h19M4 9.5v4a3 3 0 0 0 3 3h1.5a3 3 0 0 0 2.8-2l.7-2 .7 2a3 3 0 0 0 2.8 2H17a3 3 0 0 0 3-3v-4" /></svg>
+            <span>3D</span>
+          </button>
+          <button id="head-button" class="quiet-button toggle-button" type="button" title="Follow your head with the webcam: the picture moves like a window" aria-label="Head tracking" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="4" /><path d="M5 21a7 7 0 0 1 14 0M2 9h2M20 9h2" /></svg>
+            <span>Head</span>
+          </button>
+          <button id="vr-button" class="quiet-button" type="button" title="View in VR" aria-label="View in VR" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 7h13A2.5 2.5 0 0 1 21 9.5v5a2.5 2.5 0 0 1-2.5 2.5h-3.3l-1.7-2.4a1.8 1.8 0 0 0-3 0L8.8 17H5.5A2.5 2.5 0 0 1 3 14.5v-5A2.5 2.5 0 0 1 5.5 7z" /><circle cx="8" cy="12" r="1.6" /><circle cx="16" cy="12" r="1.6" /></svg>
+            <span>VR</span>
+          </button>
+          <button id="reset-view" class="quiet-button" type="button" title="Reset view" aria-label="Reset view">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6" /></svg>
+            <span>Reset</span>
+          </button>
+          <a id="download-link" class="quiet-button" href="#" title="Download splat" aria-label="Download splat" download hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4" /></svg>
+            <span>Download</span>
+          </a>
+        </div>
+      </footer>
+
+      <div id="vr-start" class="vr-start" hidden>
+        <button id="vr-start-button" class="vr-start-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 7h13A2.5 2.5 0 0 1 21 9.5v5a2.5 2.5 0 0 1-2.5 2.5h-3.3l-1.7-2.4a1.8 1.8 0 0 0-3 0L8.8 17H5.5A2.5 2.5 0 0 1 3 14.5v-5A2.5 2.5 0 0 1 5.5 7z" /><circle cx="8" cy="12" r="1.6" /><circle cx="16" cy="12" r="1.6" /></svg>
+          <span>Enter VR</span>
+        </button>
+        <button id="vr-start-dismiss" class="quiet-button" type="button">Stay on screen</button>
+      </div>
+
+      <div id="toast" class="toast" role="status" hidden></div>
+    </main>
+    <input id="file-input" type="file" accept=".ply,.spz,.splat,.ksplat" hidden />
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

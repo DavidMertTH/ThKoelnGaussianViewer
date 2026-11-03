@@ -9,6 +9,7 @@
     "start": "node server.js --open"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
     "@sparkjsdev/spark": "2.3.1",
     "three": "0.186.1"
   },

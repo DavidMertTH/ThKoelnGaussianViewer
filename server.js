@@ -1,15 +1,24 @@
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { execFile, spawn } from 'node:child_process';
-import { homedir } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { loadCertificate } from './cert.js';
+import { firewallActive, startHotspot } from './hotspot.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = join(root, 'dist');
 const settingsFile = join(root, 'settings.json');
+const thumbnails = join(root, 'thumbnails');
+const maxThumbnailBytes = 1 << 20;
+// Star ratings live next to the scenes, so they move with the folder. Hidden, like the folder's other dot files.
+const ratingsName = '.viewer-ratings.json';
+const maxRating = 3;
 const splatExtensions = new Set(['.ply', '.spz', '.splat', '.ksplat']);
 const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
 const contentTypes = {
@@ -39,8 +48,15 @@ function savedFolder() {
 }
 
 const port = Number(option('port', 43210));
+const lanPort = Number(option('lan-port', port + 1));
 let scenesRoot = resolve(option('scenes', savedFolder() || join(root, 'scenes')));
 const openBrowser = process.argv.includes('--open');
+// Headsets on the network are served by default; --no-lan keeps the viewer to this computer.
+const lan = !process.argv.includes('--no-lan');
+// On Linux --hotspot opens a Wi-Fi hotspot for the headsets; without it the Wi-Fi stays as it is.
+const hotspot = lan && process.argv.includes('--hotspot');
+// Shows frame-rate displays in the viewer, on screen and in VR.
+const debug = process.argv.includes('--debug');
 const dialogTitle = 'Choose scene folder';
 const windowsDialog = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -61,6 +77,16 @@ let pendingDialog = null;
 
 function inside(base, target) {
   return target === base || target.startsWith(base + sep);
+}
+
+function lanAddresses() {
+  return Object.values(networkInterfaces()).flat()
+    .filter((item) => item.family === 'IPv4' && !item.internal)
+    .map((item) => item.address);
+}
+
+function fromThisComputer(request) {
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress);
 }
 
 async function folderDialog() {
@@ -90,11 +116,49 @@ function chooseFolder() {
   return pendingDialog;
 }
 
+// The key changes when the splat file changes, so an old thumbnail is never shown for a new scene.
+function thumbnailName(path, stats) {
+  return `${createHash('sha1').update(`${path}\n${stats.size}\n${stats.mtimeMs}`).digest('hex')}.jpg`;
+}
+
+function sceneFile(id) {
+  const path = resolve(scenesRoot, id);
+  const stats = statSync(path, { throwIfNoEntry: false });
+  return inside(scenesRoot, path) && splatExtensions.has(extname(path).toLowerCase()) && stats?.isFile() ? { path, stats } : null;
+}
+
+function ratingsFile() {
+  return join(scenesRoot, ratingsName);
+}
+
+// Scene id → 1 to 3 stars; unrated scenes are left out.
+function readRatings() {
+  try {
+    const ratings = JSON.parse(readFileSync(ratingsFile(), 'utf8'));
+    return ratings && typeof ratings === 'object' && !Array.isArray(ratings) ? ratings : {};
+  } catch {
+    return {};
+  }
+}
+
+function readBody(request, limit) {
+  return new Promise((done, fail) => {
+    const chunks = [];
+    let size = 0;
+    request.on('data', (chunk) => {
+      size += chunk.length;
+      if (size <= limit) chunks.push(chunk);
+    });
+    request.on('end', () => (size > limit ? fail(new Error('The upload is too large.')) : done(Buffer.concat(chunks))));
+    request.on('error', fail);
+  });
+}
+
 function fileUrl(path) {
   return `/files/${relative(scenesRoot, path).split(sep).map(encodeURIComponent).join('/')}`;
 }
 
-async function readFolder(folder) {
+async function readFolder(folder, ratings) {
   let entries;
   try {
     entries = await readdir(folder, { withFileTypes: true });
@@ -109,7 +173,7 @@ async function readFolder(folder) {
   for (const entry of entries) {
     const path = join(folder, entry.name);
     if (entry.isDirectory()) {
-      const child = await readFolder(path);
+      const child = await readFolder(path, ratings);
       if (child.folders.length || child.scenes.length) folders.push(child);
       continue;
     }
@@ -120,20 +184,32 @@ async function readFolder(folder) {
     const stem = entry.name.slice(0, -extension.length);
     const image = imageExtensions.map((suffix) => `${stem}${suffix}`).find((name) => names.has(name.toLowerCase()));
     const imageName = image && entries.find((item) => item.name.toLowerCase() === image.toLowerCase()).name;
+    const thumbnail = thumbnailName(path, stats);
+    const id = relative(scenesRoot, path).split(sep).join('/');
     scenes.push({
-      id: relative(scenesRoot, path).split(sep).join('/'),
+      id,
       name: stem,
       sizeBytes: stats.size,
+      // When the file arrived in the folder, for sorting by newest: copying or moving it in sets ctime.
+      addedAt: Math.round(Math.max(stats.birthtimeMs || 0, stats.ctimeMs)),
       plyUrl: fileUrl(path),
       fileName: entry.name,
       imageUrl: imageName ? fileUrl(join(folder, imageName)) : null,
+      thumbUrl: existsSync(join(thumbnails, thumbnail)) ? `/thumbnails/${thumbnail}` : null,
+      rating: Number.isInteger(ratings[id]) && ratings[id] >= 1 && ratings[id] <= maxRating ? ratings[id] : 0,
     });
   }
   return { name: basename(folder), path: relative(scenesRoot, folder).split(sep).join('/'), folders, scenes };
 }
 
-async function readLibrary() {
-  return { root: scenesRoot, exists: existsSync(scenesRoot), tree: await readFolder(scenesRoot) };
+async function readLibrary(request) {
+  return {
+    root: scenesRoot,
+    exists: existsSync(scenesRoot),
+    canChooseFolder: fromThisComputer(request),
+    debug,
+    tree: await readFolder(scenesRoot, readRatings()),
+  };
 }
 
 function sendJson(response, status, payload) {
@@ -161,7 +237,7 @@ function sendFile(response, path, cache) {
   createReadStream(path).pipe(response);
 }
 
-const server = createServer(async (request, response) => {
+async function handleRequest(request, response) {
   let path;
   try {
     path = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
@@ -170,6 +246,10 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (path === '/api/folder' && request.method === 'POST') {
+    if (!fromThisComputer(request)) {
+      sendJson(response, 403, { error: 'The scene folder can only be changed on the computer running the viewer.' });
+      return;
+    }
     let folder;
     try {
       folder = await chooseFolder();
@@ -183,7 +263,64 @@ const server = createServer(async (request, response) => {
         writeFileSync(settingsFile, JSON.stringify({ scenes: scenesRoot }, null, 2));
       } catch {}
     }
-    sendJson(response, 200, { ...(await readLibrary()), changed: !!folder });
+    sendJson(response, 200, { ...(await readLibrary(request)), changed: !!folder });
+    return;
+  }
+  if (path === '/api/thumbnail' && request.method === 'POST') {
+    const scene = sceneFile(new URL(request.url, 'http://localhost').searchParams.get('scene') || '');
+    if (!scene) {
+      sendJson(response, 404, { error: 'Scene not found' });
+      return;
+    }
+    let image;
+    try {
+      image = await readBody(request, maxThumbnailBytes);
+    } catch (error) {
+      sendJson(response, 413, { error: error.message });
+      return;
+    }
+    if (image[0] !== 0xff || image[1] !== 0xd8 || image[2] !== 0xff) {
+      sendJson(response, 415, { error: 'Thumbnails must be JPEG images.' });
+      return;
+    }
+    const name = thumbnailName(scene.path, scene.stats);
+    try {
+      mkdirSync(thumbnails, { recursive: true });
+      writeFileSync(join(thumbnails, name), image);
+    } catch (error) {
+      sendJson(response, 500, { error: error.message });
+      return;
+    }
+    sendJson(response, 200, { thumbUrl: `/thumbnails/${name}` });
+    return;
+  }
+  // Body: { rating: 0 to 3 }, 0 clears it. Headsets rate too, so this is open to the network like the scenes.
+  if (path === '/api/rating' && request.method === 'POST') {
+    const id = new URL(request.url, 'http://localhost').searchParams.get('scene') || '';
+    if (!sceneFile(id)) {
+      sendJson(response, 404, { error: 'Scene not found' });
+      return;
+    }
+    let rating;
+    try {
+      ({ rating } = JSON.parse((await readBody(request, 1024)).toString('utf8')));
+    } catch {
+      rating = null;
+    }
+    if (!Number.isInteger(rating) || rating < 0 || rating > maxRating) {
+      sendJson(response, 400, { error: `The rating must be a whole number from 0 to ${maxRating}.` });
+      return;
+    }
+    const ratings = readRatings();
+    if (rating) ratings[id] = rating;
+    else delete ratings[id];
+    try {
+      writeFileSync(ratingsFile(), `${JSON.stringify(ratings, null, 2)}\n`);
+    } catch (error) {
+      sendJson(response, 500, { error: `Could not save the rating: ${error.message}` });
+      return;
+    }
+    sendJson(response, 200, { rating });
     return;
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -191,7 +328,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (path === '/api/scenes') {
-    sendJson(response, 200, await readLibrary());
+    sendJson(response, 200, await readLibrary(request));
     return;
   }
   if (path.startsWith('/files/')) {
@@ -200,10 +337,36 @@ const server = createServer(async (request, response) => {
     else sendJson(response, 404, { error: 'File not found' });
     return;
   }
+  if (path.startsWith('/thumbnails/')) {
+    const target = resolve(thumbnails, `.${path.slice('/thumbnails'.length)}`);
+    if (inside(thumbnails, target)) sendFile(response, target, 'max-age=31536000, immutable');
+    else sendJson(response, 404, { error: 'File not found' });
+    return;
+  }
   const target = resolve(dist, `.${path === '/' ? '/index.html' : path}`);
   if (inside(dist, target)) sendFile(response, target, path.startsWith('/assets/') ? 'max-age=31536000, immutable' : 'no-cache');
   else sendJson(response, 404, { error: 'File not found' });
-});
+}
+
+const server = createServer(handleRequest);
+
+// Headsets need HTTPS for WebXR, so the network gets its own port with a self-signed certificate.
+function startLanServer() {
+  const lanServer = createHttpsServer(loadCertificate(join(root, 'certs'), lanAddresses()), handleRequest);
+  lanServer.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Port ${lanPort} is already in use. Start the viewer with --lan-port <port> to use another one.`);
+      process.exit(1);
+    }
+    throw error;
+  });
+  lanServer.listen(lanPort, () => {
+    const addresses = lanAddresses();
+    for (const address of addresses) console.log(`Headsets and other devices: https://${address}:${lanPort}`);
+    if (!addresses.length) console.log(`No network found. Headsets can connect on port ${lanPort} once this computer is online.`);
+    console.log('Close this window or press Ctrl+C to stop.');
+  });
+}
 
 function launchBrowser(url) {
   const [command, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
@@ -221,14 +384,37 @@ const url = `http://127.0.0.1:${port}`;
 server.on('error', (error) => {
   if (error.code === 'EADDRINUSE') {
     console.log(`Port ${port} is already in use. The viewer is probably running already: ${url}`);
+    if (lan) console.log('If it was not started for headsets, close it and start again.');
     if (openBrowser) launchBrowser(url);
     process.exit(0);
   }
   throw error;
 });
-server.listen(port, '127.0.0.1', () => {
+// Only once this viewer has its port, so a second start does not touch the Wi-Fi of the running one.
+async function openHotspot() {
+  if (process.platform !== 'linux') return;
+  console.log('Opening the Wi-Fi hotspot for headsets …');
+  const opened = await startHotspot();
+  if (opened.skipped) {
+    console.log(`No hotspot: ${opened.skipped} Headsets can still connect through the network.`);
+    return;
+  }
+  // Closing the window or Ctrl+C turns the hotspot off, and the Wi-Fi goes back to its network.
+  process.on('exit', opened.stop);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => process.exit(0));
+  console.log(`Hotspot "${opened.ssid}" is on${opened.password ? `, password: ${opened.password}` : ''}.`);
+  if (opened.address) console.log(`Connect the headsets to it and open https://${opened.address}:${lanPort}`);
+  if (firewallActive()) {
+    console.log(`The firewall is on. If headsets cannot open the page, allow it once: sudo ufw allow in on ${opened.device} to any port ${lanPort} proto tcp`);
+  }
+}
+
+server.listen(port, '127.0.0.1', async () => {
   console.log(`Gaussian Viewer: ${url}`);
   console.log(`Scenes: ${scenesRoot}`);
-  console.log('Close this window or press Ctrl+C to stop.');
+  if (debug) console.log('Debug: frame-rate displays are on.');
+  if (hotspot) await openHotspot();
+  if (lan) startLanServer();
+  else console.log('Close this window or press Ctrl+C to stop.');
   if (openBrowser) launchBrowser(url);
 });
