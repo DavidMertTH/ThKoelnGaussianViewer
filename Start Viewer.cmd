@@ -4,7 +4,9 @@ where node >nul 2>nul || (
     echo Node.js was not found. Install Node.js 22 or newer from https://nodejs.org and try again.
     goto failed
 )
-if not exist dist\index.html (
+rem First start, or an update pulled new code: install and build again.
+node check-install.js
+if errorlevel 1 (
     call install.cmd quiet || goto failed
 )
 node server.js --open %*

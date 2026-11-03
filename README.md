@@ -22,6 +22,10 @@ cd ThKoelnGaussianViewer
 
 The viewer opens in your browser at http://127.0.0.1:43210.
 
+## Update
+
+Get the new version with `git pull`, then start the viewer as usual. The start scripts notice the new code and install and build it again before the viewer opens, which takes a minute once.
+
 ## Scenes
 
 The start page loads without the 3D viewer, so it opens quickly on headsets. "Browse scenes" shows every scene with a thumbnail; pick one to open it in the viewer.
