@@ -75,11 +75,6 @@
         <span id="viewer-hint" class="viewer-hint">Drag to orbit · Scroll to zoom</span>
         <div class="scene-info">
           <span id="scene-name" class="scene-name" aria-live="polite"></span>
-          <div id="scene-rating" class="scene-rating" role="group" aria-label="Rating" hidden>
-            <button class="rating-star" type="button" data-rating="1" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
-            <button class="rating-star" type="button" data-rating="2" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
-            <button class="rating-star" type="button" data-rating="3" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
-          </div>
           <nav id="scene-stepper" class="scene-stepper" aria-label="Scene navigation" hidden>
             <button id="scene-previous" class="carousel-arrow" type="button" title="Previous scene" aria-label="Previous scene">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
@@ -91,6 +86,10 @@
           </nav>
         </div>
         <div class="view-actions">
+          <button id="rating-button" class="quiet-button toggle-button" type="button" title="Rate the scene, export and import ratings" aria-label="Rating" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg>
+            <span>Rate</span>
+          </button>
           <button id="renderer-button" class="quiet-button" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z" /><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" /></svg>
             <span>Compute</span>
@@ -140,8 +139,64 @@
         <button id="vr-start-dismiss" class="quiet-button" type="button">Stay on screen</button>
       </div>
 
+      <aside id="rating-panel" class="rating-panel" aria-label="Rating" hidden>
+        <section id="rating-own" class="rating-section">
+          <h2>Your rating</h2>
+          <div class="rating-score" role="group" aria-label="Score, 0 to 5 stars">
+            <button class="rating-zero" type="button" data-score="0" aria-pressed="false">0</button>
+            <button class="rating-star" type="button" data-score="1" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <button class="rating-star" type="button" data-score="2" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <button class="rating-star" type="button" data-score="3" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <button class="rating-star" type="button" data-score="4" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <button class="rating-star" type="button" data-score="5" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg></button>
+            <span id="rating-score-value" class="rating-score-value"></span>
+          </div>
+          <textarea id="rating-comment" class="rating-comment" rows="3" placeholder="Comment" aria-label="Comment" spellcheck="true"></textarea>
+          <p class="rating-distance" title="The distance starts at ×1 in every scene. Its value when the next scene opens is saved, if it was changed.">
+            <span>Distance</span> <b id="rating-distance-now"></b> <span id="rating-distance-saved" class="rating-note"></span>
+          </p>
+        </section>
+        <p id="rating-local" class="rating-note" hidden>Scenes opened from this computer cannot be rated.</p>
+        <section id="rating-all" class="rating-section" hidden>
+          <h2>All ratings <span id="rating-all-count" class="rating-count"></span></h2>
+          <dl class="rating-summary">
+            <div><dt>Score</dt><dd id="rating-average-score"></dd><dd id="rating-average-score-detail" class="rating-note"></dd></div>
+            <div>
+              <dt>Distance</dt><dd id="rating-average-distance"></dd><dd id="rating-average-distance-detail" class="rating-note"></dd>
+              <dd><button id="rating-show-average" class="rating-link" type="button" title="Show the scene at the average distance">Show</button></dd>
+            </div>
+          </dl>
+          <ul id="rating-list" class="rating-list"></ul>
+        </section>
+        <footer class="rating-files">
+          <span id="rating-progress" class="rating-note"></span>
+          <button id="rating-export" class="rating-link" type="button" title="Save this computer's ratings as a file">Export</button>
+          <button id="rating-import" class="rating-link" type="button" title="Add a ratings file exported on another computer" hidden>Import</button>
+        </footer>
+        <details id="rating-imports" class="rating-imports" hidden>
+          <summary>Imported ratings (<span id="rating-imports-count"></span>)</summary>
+          <ul id="rating-import-list"></ul>
+        </details>
+      </aside>
+
       <div id="toast" class="toast" role="status" hidden></div>
     </main>
+    <dialog id="import-dialog" class="import-dialog">
+      <form method="dialog">
+        <h2>Import ratings</h2>
+        <p id="import-file" class="rating-note"></p>
+        <label>
+          <span>Name of the person who rated</span>
+          <input id="import-name" type="text" required maxlength="100" autocomplete="off" />
+        </label>
+        <p id="import-replace" class="rating-note" hidden></p>
+        <div class="import-actions">
+          <button id="import-cancel" class="quiet-button" type="button">Cancel</button>
+          <button class="quiet-button primary" type="submit" value="import">Import</button>
+        </div>
+      </form>
+    </dialog>
+    <input id="rating-file" type="file" accept=".json,application/json" hidden />
     <input id="file-input" type="file" accept=".ply,.spz,.splat,.ksplat" hidden />
     <script type="module" src="/src/main.js"></script>
   </body>

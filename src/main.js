@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PackedSplats, SparkRenderer, SparkXr, SplatMesh, dyno } from '@sparkjsdev/spark';
 import { Ambilight } from './ambilight.js';
 import { ComputeSplats, createComputeSplatRenderer } from './compute-splats.js';
-import { canRate, saveRating, savedFilter } from './scene-rating.js';
+import { createRatingPanel } from './rating-panel.js';
 import { browserOrder, savedSort } from './scene-sort.js';
 import { createVrSceneBrowser } from './vr-browser.js';
 import { WebGpuXr, webGpuXrSupported } from './webgpu-xr.js';
@@ -20,8 +20,6 @@ const compareOriginal = $('#compare-original');
 const compareDivider = $('#compare-divider');
 const depthButton = $('#depth-button');
 const depthLegend = $('#depth-legend');
-const ratingControl = $('#scene-rating');
-const ratingStars = [...ratingControl.querySelectorAll('.rating-star')];
 const loadingPanel = $('#viewer-loading');
 const loadingDetail = $('#viewer-loading-detail');
 const dropOverlay = $('#drop-overlay');
@@ -101,12 +99,8 @@ let depthEnabled = false;
 // Each splat moves away from the start view by stretch × its depth behind the nearest surface,
 // so the front stays put and far splats travel furthest.
 const depthStretch = dyno.dynoFloat(0);
-// The slider shows 1 + stretch, so scenes open at ×1.00 until the viewer picks another value.
+// The slider shows 1 + stretch. Every scene opens at ×1.00, since the distance is part of its rating.
 const DEFAULT_DEPTH_STRETCH = 0;
-// The stretch is a viewing preference, so it carries over to every scene and page load.
-const depthStretchStorageKey = 'gaussian-viewer-depth-stretch';
-const DEPTH_STRETCH_SAVE_MS = 300;
-let depthStretchSaveTimer = null;
 // The start camera sits at the origin looking down -Z, so this axis points away from the viewer.
 const STRETCH_AXIS = new THREE.Vector3(0, 0, -1);
 const lookDirection = new THREE.Vector3();
@@ -303,13 +297,18 @@ const vrBrowser = createVrSceneBrowser({
     if (open) refreshScenes();
   },
   onSelect: (id) => void selectScene(id),
-  onRate: (item, rating) => void rateScene(item, rating),
-  // Stepping follows the panel's sort and star class; the next and previous scene change with them.
+  // Stepping follows the panel's sort; the next and previous scene change with it.
   onOrderChange: () => {
     updateScenePosition();
     prefetchNeighbors();
   },
   onExit: () => (gpuXr?.presenting ? gpuXr.end() : renderer.xr.getSession()?.end()),
+});
+
+const ratingPanel = createRatingPanel({
+  distance: () => 1 + depthStretch.value,
+  onShowDistance: (factor) => setDepthStretch(THREE.MathUtils.clamp(factor - 1, Number(offsetSlider.min), Number(offsetSlider.max)), false),
+  showToast,
 });
 
 function turbo(t) {
@@ -424,31 +423,16 @@ function stretchedFocus(stretch) {
   return focus + Math.max(focus - near, 0) * stretch;
 }
 
-function setDepthStretch(value, remember = true) {
+// byUser: the slider or the stick changed it, so it goes into the scene's rating.
+function setDepthStretch(value, byUser = true) {
   controls.target.addScaledVector(STRETCH_AXIS, stretchedFocus(value) - stretchedFocus(depthStretch.value));
   depthStretch.value = value;
   offsetSlider.value = String(value);
   offsetValue.textContent = `×${(1 + value).toFixed(2)}`;
   currentMesh?.updateVersion();
   updateDepthLegend();
-  if (!remember) return;
-  // Saved once the value settles: the stick changes it every frame, and each write stalls the headset.
-  clearTimeout(depthStretchSaveTimer);
-  depthStretchSaveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(depthStretchStorageKey, String(depthStretch.value));
-    } catch {}
-  }, DEPTH_STRETCH_SAVE_MS);
-}
-
-function savedDepthStretch() {
-  let value = NaN;
-  try {
-    value = Number(localStorage.getItem(depthStretchStorageKey) ?? NaN);
-  } catch {}
-  return Number.isFinite(value)
-    ? THREE.MathUtils.clamp(value, Number(offsetSlider.min), Number(offsetSlider.max))
-    : DEFAULT_DEPTH_STRETCH;
+  if (byUser) ratingPanel.distanceChanged();
+  else ratingPanel.showDistance();
 }
 
 depthLegend.querySelector('.depth-legend-bar').style.background = `linear-gradient(90deg, ${
@@ -932,8 +916,6 @@ function captureThumbnail() {
 // Opened from the scene browser: walk through every scene that has no thumbnail yet.
 async function createMissingThumbnails() {
   setDepthEnabled(false);
-  // Thumbnails show the default view; the saved stretch stays for the next visit.
-  setDepthStretch(DEFAULT_DEPTH_STRETCH, false);
   const missing = scenes.filter((item) => !item.thumbUrl);
   let created = 0;
   for (const [index, item] of missing.entries()) {
@@ -976,7 +958,6 @@ function updateSceneActions(item) {
 function updateSceneListSelection() {
   updateScenePosition();
   vrBrowser.setScenes(allScenes(), activeSceneId);
-  updateRating();
 }
 
 function updateScenePosition() {
@@ -986,52 +967,15 @@ function updateScenePosition() {
   $('#scene-stepper').hidden = order.length < 2;
 }
 
-function updateRating() {
-  const item = allScenes().find((candidate) => candidate.id === activeSceneId);
-  const rating = item?.rating ?? 0;
-  ratingControl.hidden = !canRate(item);
-  for (const star of ratingStars) {
-    const value = Number(star.dataset.rating);
-    star.classList.toggle('filled', value <= rating);
-    star.setAttribute('aria-pressed', String(value === rating));
-    star.title = value === rating ? 'Clear the rating (0)' : `Rate ${value} ${value === 1 ? 'star' : 'stars'} (${value})`;
-  }
-}
-
-// Shown at once, and put back if the server could not keep it.
-async function rateScene(item, rating) {
-  if (!canRate(item)) return;
-  const previous = item.rating ?? 0;
-  item.rating = rating;
-  updateRating();
-  updateScenePosition();
-  try {
-    await saveRating(item, rating);
-  } catch (error) {
-    if (item.rating === rating) item.rating = previous;
-    updateRating();
-    updateScenePosition();
-    vrBrowser.redraw();
-    showToast(error.message, true);
-  }
-}
-
-// Choosing the stars the scene already has clears its rating.
-function rateActiveScene(rating) {
-  const item = allScenes().find((candidate) => candidate.id === activeSceneId);
-  if (canRate(item)) void rateScene(item, item.rating === rating ? 0 : rating);
-}
-
 // A folder's own scenes before those of its subfolders, as the scene browsers list them.
 function folderScenes(node) {
   return [...node.scenes, ...node.folders.flatMap(folderScenes)];
 }
 
-// The order the arrows and the VR stick step through: the scene browser's, with its sort and star
-// class, both remembered by the grid page and the VR panel. The open scene stays in it even outside
-// the star class, so stepping goes on from where it sits.
-function sceneOrder(keepId = activeSceneId) {
-  return browserOrder(allScenes(), savedSort(), savedFilter(), keepId).map((item) => item.id);
+// The order the arrows and the VR stick step through: the scene browser's, with its sort, remembered
+// by the grid page and the VR panel.
+function sceneOrder() {
+  return browserOrder(allScenes(), savedSort()).map((item) => item.id);
 }
 
 // The folder button of the empty view, and the scene position.
@@ -1063,7 +1007,7 @@ function moveCompareDivider(clientX) {
 
 function stepScene(direction) {
   const currentId = requestedScene?.id ?? activeSceneId;
-  const order = sceneOrder(currentId);
+  const order = sceneOrder();
   if (!order.length) return;
   const currentIndex = order.indexOf(currentId);
   const nextIndex = (currentIndex + direction + order.length) % order.length;
@@ -1146,7 +1090,8 @@ function clearScene() {
   depthButton.hidden = true;
   offsetControl.hidden = true;
   $('#scene-name').textContent = '';
-  ratingControl.hidden = true;
+  ratingPanel.leave();
+  ratingPanel.setScene(null);
   setCompareEnabled(false);
   setDepthEnabled(depthEnabled);
   updateSceneListSelection();
@@ -1311,6 +1256,8 @@ async function selectScene(id) {
     }
     mesh.userData.focusDistance ??= measureFocusDistance(mesh.packedSplats);
     mesh.visible = !vrBrowser.isOpen;
+    // The scene before keeps the distance it has now in its rating.
+    if (activeSceneId !== id) ratingPanel.leave();
     scene.add(mesh);
     if (currentMesh) scene.remove(currentMesh);
     currentMesh = mesh;
@@ -1323,7 +1270,9 @@ async function selectScene(id) {
       rememberStartView(mesh);
       mesh.userData.depthRange = measureDepthRange(mesh);
     }
-    // The stretch carries over between scenes; aim the orbit at the stretched focus of this one.
+    // Every scene starts at distance ×1.
+    setDepthStretch(DEFAULT_DEPTH_STRETCH, false);
+    ratingPanel.setScene(item);
     resetCamera();
     setDepthEnabled(depthEnabled);
     if (xrPresenting()) resetXrRig();
@@ -1376,7 +1325,7 @@ compareButton.addEventListener('click', () => setCompareEnabled(!compareEnabled)
 depthButton.addEventListener('click', () => setDepthEnabled(!depthEnabled));
 offsetSlider.addEventListener('input', () => setDepthStretch(Number(offsetSlider.value)));
 offsetSlider.addEventListener('dblclick', () => setDepthStretch(DEFAULT_DEPTH_STRETCH));
-setDepthStretch(savedDepthStretch(), false);
+setDepthStretch(DEFAULT_DEPTH_STRETCH, false);
 compareDivider.addEventListener('pointerdown', (event) => {
   compareDragging = true;
   compareDivider.setPointerCapture(event.pointerId);
@@ -1399,7 +1348,6 @@ compareDivider.addEventListener('keydown', (event) => {
     updateComparePosition(100);
   }
 });
-for (const star of ratingStars) star.addEventListener('click', () => rateActiveScene(Number(star.dataset.rating)));
 $('#scene-previous').addEventListener('click', () => stepScene(-1));
 $('#scene-next').addEventListener('click', () => stepScene(1));
 $('#reset-view').addEventListener('click', () => (xrPresenting() ? resetXrRig() : resetCamera()));
@@ -1427,14 +1375,12 @@ window.addEventListener('drop', (event) => {
   openLocalFile(event.dataTransfer?.files?.[0]);
 });
 
-// Arrow keys step through the scenes, 1 to 3 rate the scene and 0 clears its rating.
+// Arrow keys step through the scenes, 0 to 5 give the scene that score; the same key again clears it.
 document.addEventListener('keydown', (event) => {
   if (event.defaultPrevented || event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
   if (event.target.closest?.('input, select, textarea, [contenteditable], [role="slider"]')) return;
-  if (/^[0-3]$/.test(event.key)) {
-    const rating = Number(event.key);
-    const item = allScenes().find((candidate) => candidate.id === activeSceneId);
-    if (canRate(item)) void rateScene(item, rating);
+  if (/^[0-5]$/.test(event.key)) {
+    ratingPanel.rate(Number(event.key));
     return;
   }
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;

@@ -2,7 +2,6 @@
 // share the choice and remember it.
 export const SCENE_SORTS = [
   { key: 'name', compare: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) },
-  { key: 'rating', compare: (a, b) => (a.rating ?? 0) - (b.rating ?? 0) },
   { key: 'size', compare: (a, b) => a.sizeBytes - b.sizeBytes },
   { key: 'added', compare: (a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0) },
 ];
@@ -11,15 +10,11 @@ export const SCENE_SORTS = [
 export const SORT_OPTIONS = [
   { key: 'name', descending: false, label: 'Name A–Z' },
   { key: 'name', descending: true, label: 'Name Z–A' },
-  { key: 'rating', descending: true, label: 'Best rated' },
-  { key: 'rating', descending: false, label: 'Lowest rated' },
   { key: 'added', descending: true, label: 'Newest' },
   { key: 'added', descending: false, label: 'Oldest' },
   { key: 'size', descending: true, label: 'Largest' },
   { key: 'size', descending: false, label: 'Smallest' },
 ];
-
-import { passesFilter } from './scene-rating.js';
 
 const storageKey = 'gaussian-viewer-scene-sort';
 const byKey = (key) => SCENE_SORTS.find((sort) => sort.key === key);
@@ -50,12 +45,10 @@ export function sortScenes(scenes, { key, descending }) {
   return [...scenes].sort((a, b) => sign * compare(a, b) || SCENE_SORTS[0].compare(a, b));
 }
 
-// The scenes as the browsers list them: folder by folder in the order the folders come, the chosen
-// star class sorted within each. keepId stays in even outside the star class.
-export function browserOrder(scenes, sort, filter, keepId = null) {
+// The scenes as the browsers list them: folder by folder in the order the folders come, sorted within each.
+export function browserOrder(scenes, sort) {
   const folders = new Map();
   for (const item of scenes) {
-    if (!passesFilter(item, filter) && item.id !== keepId) continue;
     const folder = item.id.startsWith('local:') ? 'local:' : item.id.slice(0, Math.max(0, item.id.lastIndexOf('/')));
     if (!folders.has(folder)) folders.set(folder, []);
     folders.get(folder).push(item);

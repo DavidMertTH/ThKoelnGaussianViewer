@@ -1,4 +1,3 @@
-import { MAX_RATING, RATING_FILTERS, filterLabel, passesFilter, saveFilter, savedFilter } from './scene-rating.js';
 import { SORT_OPTIONS, saveSort, savedSort, sortScenes, sortValue } from './scene-sort.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -6,25 +5,14 @@ const browser = $('#scene-browser');
 const folderButton = $('#folder-button');
 const reloadButton = $('#reload-button');
 const thumbnailsLink = $('#thumbnails-link');
-const ratingFilter = $('#rating-filter');
 const sortSelect = $('#sort-select');
 const searchInput = $('#scene-search');
 let query = '';
 let sort = savedSort();
-let filter = savedFilter();
 let shownLibrary = null;
 
 function formatBytes(bytes) {
   return bytes >= 1e6 ? `${(bytes / 1e6).toLocaleString('en-US', { maximumFractionDigits: 0 })} MB` : `${Math.ceil(bytes / 1e3)} kB`;
-}
-
-const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" /></svg>';
-
-function stars(count, total = count) {
-  const group = document.createElement('span');
-  group.className = 'stars';
-  group.innerHTML = Array.from({ length: total }, (_, index) => STAR.replace('<svg', `<svg class="${index < count ? 'filled' : ''}"`)).join('');
-  return group;
 }
 
 function message(text) {
@@ -78,14 +66,7 @@ function sceneCard(item) {
   const size = document.createElement('span');
   size.className = 'scene-card-size';
   size.textContent = formatBytes(item.sizeBytes);
-  copy.append(name);
-  if (item.rating) {
-    const rating = stars(item.rating, MAX_RATING);
-    rating.classList.add('scene-card-rating');
-    rating.title = `${item.rating} of ${MAX_RATING} stars`;
-    copy.append(rating);
-  }
-  copy.append(size);
+  copy.append(name, size);
   card.append(copy);
   return card;
 }
@@ -95,18 +76,12 @@ function render(library) {
   shownLibrary = library;
   sortSelect.value = sortValue(sort);
   const all = sections(library.tree);
-  const everyScene = all.flatMap((group) => group.scenes);
-  for (const button of ratingFilter.children) {
-    const value = RATING_FILTERS[button.dataset.index].value;
-    button.setAttribute('aria-pressed', String(value === filter));
-    button.querySelector('.filter-count').textContent = everyScene.filter((item) => passesFilter(item, value)).length;
-  }
   const groups = all
-    .map((group) => ({ ...group, scenes: sortScenes(group.scenes.filter((item) => passesFilter(item, filter) && matches(item, group.title)), sort) }))
+    .map((group) => ({ ...group, scenes: sortScenes(group.scenes.filter((item) => matches(item, group.title)), sort) }))
     .filter((group) => group.scenes.length);
-  const total = everyScene.length;
+  const total = all.reduce((sum, group) => sum + group.scenes.length, 0);
   const shown = groups.reduce((sum, group) => sum + group.scenes.length, 0);
-  $('#scene-count').textContent = query || filter !== 'all' ? `${shown} of ${total} scenes` : `${total} ${total === 1 ? 'scene' : 'scenes'}`;
+  $('#scene-count').textContent = query ? `${shown} of ${total} scenes` : `${total} ${total === 1 ? 'scene' : 'scenes'}`;
   // Thumbnails are made by the viewer; only offer the batch run on the computer with the scenes.
   const missing = all.reduce((sum, group) => sum + group.scenes.filter((item) => !item.thumbUrl).length, 0);
   thumbnailsLink.hidden = !library.canChooseFolder || !missing;
@@ -120,7 +95,7 @@ function render(library) {
     return;
   }
   if (!shown) {
-    browser.replaceChildren(message(query ? `None of the ${filterLabel(filter)} match “${query}”.` : `There are no ${filterLabel(filter)} yet.`));
+    browser.replaceChildren(message(`No scenes match “${query}”.`));
     return;
   }
   browser.replaceChildren(...groups.map((group) => {
@@ -154,23 +129,6 @@ async function load(request) {
     folderButton.disabled = false;
   }
 }
-
-RATING_FILTERS.forEach((option, index) => {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.dataset.index = index;
-  button.title = `Show ${filterLabel(option.value)}`;
-  if (option.stars) button.append(stars(option.stars));
-  else button.append(option.label);
-  const count = document.createElement('span');
-  count.className = 'filter-count';
-  button.append(count);
-  button.addEventListener('click', () => {
-    filter = saveFilter(option.value);
-    if (shownLibrary) render(shownLibrary);
-  });
-  ratingFilter.append(button);
-});
 
 for (const option of SORT_OPTIONS) sortSelect.add(new Option(option.label, sortValue(option)));
 sortSelect.value = sortValue(sort);

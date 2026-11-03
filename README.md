@@ -30,15 +30,23 @@ Get the new version with `git pull`, then start the viewer as usual. The start s
 
 The start page loads without the 3D viewer, so it opens quickly on headsets. "Browse scenes" shows every scene with a thumbnail; pick one to open it in the viewer.
 
-Sort the scenes by name, rating, size or when they were added with the sort menu. Both the scene browser and the browser in VR use and remember the choice.
-
-Rate how well a scene works or looks with one to three stars: click the stars under the scene name in the viewer, or press 1, 2 or 3 (0 clears the rating). Click the stars a scene already has to clear them. The buttons above the scenes show only the scenes with three, two or one star, or the unrated ones. Ratings are saved in `.viewer-ratings.json` in the scene folder, so every device sees the same ones.
+Sort the scenes by name, size or when they were added with the sort menu. Both the scene browser and the browser in VR use and remember the choice.
 
 Click "Folder" and choose the folder with your splat files (`.ply`, `.spz`, `.splat`, `.ksplat`). The viewer remembers it for the next start.
 
 The viewer saves a thumbnail the first time it shows a scene. To create the missing ones in one go, click "Create … thumbnails" in the scene browser on this computer and keep the tab open until it is done. Thumbnails are stored in the `thumbnails` folder.
 
 On Linux the folder dialog needs `zenity` or `kdialog` (installed on most desktops).
+
+## Ratings
+
+Several people can rate the scenes, each on their own computer. "Rate" in the viewer opens the rating panel on the right:
+
+- **Score:** 0 to 5 stars. Click them or press 0 to 5; the same score again clears it.
+- **Comment:** saved while typing.
+- **Distance:** every scene opens at ×1.00. The value the distance slider has when the next scene opens is saved with the scene, if it was changed while the scene was in view. Coming back to a scene starts at ×1.00 again and keeps the saved value unless the slider is moved.
+
+Ratings are saved in the `ratings` folder next to the viewer. "Export" saves this computer's ratings as a file. On the computer that collects them, "Import" adds such a file and asks for the name of the person who rated; importing again under the same name replaces their earlier ratings. Imported ratings show under "All ratings" for the scene in view, with the average score and distance; click a distance to see the scene at it. Importing only works on the computer running the viewer, not from headsets or other devices.
 
 ## Debugging
 

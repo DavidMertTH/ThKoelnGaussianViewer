@@ -1,12 +1,10 @@
 import * as THREE from 'three';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
-import { MAX_RATING, RATING_FILTERS, canRate, filterLabel, passesFilter, saveFilter, savedFilter } from './scene-rating.js';
 import { SORT_OPTIONS, saveSort, savedSort, sortOption, sortScenes, sortValue } from './scene-sort.js';
 
 // Headset interface: a scene browser panel and a loading card, both standing in the room. Controllers
-// are drawn with a pointer ray and a cursor; the trigger clicks. The stars on a card rate that scene.
-// While a scene is in view, a short pull of the right trigger brings up a rating card for it, and
-// changing the distance with the right stick shows its value on a card below the line of sight.
+// are drawn with a pointer ray and a cursor; the trigger clicks. Changing the distance with the right
+// stick shows its value on a card below the line of sight.
 //
 // renderer is three.js's WebGLRenderer, or the WebGPU XR session's stand-in for it (webgpu-xr.js),
 // which sets renderer.xr.controllerModels and renderer.xr.quadLayers to false: Quest Browser does not
@@ -18,7 +16,6 @@ import { SORT_OPTIONS, saveSort, savedSort, sortOption, sortScenes, sortValue } 
 // transparent hole into it, so controllers, rays and highlights still appear on top.
 
 const ACCENT = '#6ea6d6';
-const STAR_COLOR = '#f2c94c';
 // One canvas pixel is one millimetre on the panel.
 // 2.4 by 1.5 m keeps the 16:10 shape the panel always had.
 const PANEL = { width: 2.4, height: 1.5, distance: 1.5, drop: 0.12 };
@@ -39,18 +36,11 @@ const HEADING_HEIGHT = 72;
 const EDGE_FADE = 32;
 const SCROLLBAR = { x: CONTENT.x + CONTENT.width + (SCROLL_STRIP - 16) / 2, width: 16, minLength: 80 };
 const SCROLLBAR_HIT = { x: CONTENT.x + CONTENT.width, y: CONTENT.y, width: SCROLL_STRIP, height: CONTENT.height };
-// The stars on a card's picture, in its bottom right corner; each one is a button.
-const CARD_STAR = { width: 58, height: 58, inset: 10 };
-// Two header rows: title and leaving at the top, what to show and in which order below.
+// Two header rows: title and leaving at the top, the order below.
 const ROW_1 = { y: 28, height: 84 };
 const ROW_2 = { y: 140, height: 84 };
 const CLOSE_BUTTON = { x: PANEL_CANVAS.width - MARGIN - 100, ...ROW_1, width: 100, action: 'close', label: '✕' };
 const EXIT_BUTTON = { x: CLOSE_BUTTON.x - 20 - 230, ...ROW_1, width: 230, action: 'exit', label: 'Exit VR' };
-const FILTER_BUTTONS = RATING_FILTERS.reduce((buttons, option) => {
-  const previous = buttons.at(-1);
-  const width = option.stars ? 76 + option.stars * 40 : option.label === 'All' ? 140 : 210;
-  return [...buttons, { x: previous ? previous.x + previous.width : MARGIN, ...ROW_2, width, action: 'filter', key: option.value, option }];
-}, []);
 const SORT_BUTTON = { x: PANEL_CANVAS.width - MARGIN - 420, ...ROW_2, width: 420, action: 'sort-menu' };
 const SORT_ITEMS = SORT_OPTIONS.map((option, index) => ({
   x: SORT_BUTTON.x, y: SORT_BUTTON.y + SORT_BUTTON.height + 8 + index * 80, width: SORT_BUTTON.width, height: 80,
@@ -67,17 +57,6 @@ const LOADER_CANVAS = { width: 960, height: 284 };
 const LOADER_THUMB = { x: 22, y: 22, width: 384, height: 240 };
 const LOADER_TEXT_X = 436;
 const LOADER_TEXT_WIDTH = 494;
-// The rating card, below eye level. The left trigger lifts the user and the right one runs, so only a
-// short pull of the right trigger brings it up; it goes again soon after a rating, or after a while.
-const RATER = { width: 0.5, height: 0.17, distance: 1, drop: 0.22 };
-const RATER_CANVAS = { width: 1000, height: 340 };
-const RATER_STARS = Array.from({ length: MAX_RATING }, (_, index) => ({
-  x: RATER_CANVAS.width / 2 + (index - (MAX_RATING - 1) / 2) * 180 - 85, y: 150, width: 170, height: 170,
-  action: 'rate', value: index + 1,
-}));
-const RATER_CLICK_MS = 450;
-const RATER_AFTER_RATING_MS = 900;
-const RATER_IDLE_MS = 8000;
 // The distance card: the stretch factor and where it sits in the stick's range. It stays up a moment
 // after the stick lets go.
 const DISTANCE = { width: 0.4, height: 0.1, distance: 1, drop: 0.36 };
@@ -117,51 +96,17 @@ function drawPlaceholder(context, x, y, width, height) {
   context.fillRect(x, y, width, height);
 }
 
-// A five-pointed star around (x, y), filled or as an outline.
-function drawStar(context, x, y, radius, filled, color = STAR_COLOR) {
-  context.beginPath();
-  for (let point = 0; point < 10; point += 1) {
-    const angle = -Math.PI / 2 + (point * Math.PI) / 5;
-    const length = point % 2 ? radius * 0.45 : radius;
-    context.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length);
-  }
-  context.closePath();
-  if (filled) {
-    context.fillStyle = color;
-    context.fill();
-  } else {
-    context.strokeStyle = color;
-    context.lineWidth = 2.5;
-    context.lineJoin = 'round';
-    context.stroke();
-  }
-}
-
-function drawButton(context, { x, y, width, height, label, stars = 0 }, active = false) {
+function drawButton(context, { x, y, width, height, label }, active = false) {
   context.fillStyle = active ? '#2e4352' : '#262626';
   context.fillRect(x, y, width, height);
   context.strokeStyle = active ? ACCENT : '#ffffff30';
   context.lineWidth = 2;
   context.strokeRect(x + 1, y + 1, width - 2, height - 2);
-  if (stars) {
-    for (let index = 0; index < stars; index += 1) drawStar(context, x + width / 2 + (index - (stars - 1) / 2) * 40, y + height / 2, 17, true);
-    return;
-  }
   context.fillStyle = '#e8e8e8';
   context.font = '36px system-ui, sans-serif';
   context.textAlign = 'center';
   context.fillText(label, x + width / 2, y + height / 2);
   context.textAlign = 'left';
-}
-
-// Where star number value (1 to 3) of a card sits, in canvas pixels; y is the card's top on the panel.
-function cardStar(x, y, value) {
-  return {
-    x: x + CARD_WIDTH - CARD_STAR.inset - (MAX_RATING - value + 1) * CARD_STAR.width,
-    y: y + THUMB_HEIGHT - CARD_STAR.inset - CARD_STAR.height,
-    width: CARD_STAR.width,
-    height: CARD_STAR.height,
-  };
 }
 
 // Folder of a scene as the 2D browser titles it; scenes in the top folder have none.
@@ -175,16 +120,14 @@ function formatMegabytes(bytes) {
   return `${Math.round(bytes / 1e6)} MB`;
 }
 
-export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSelect, onRate, onExit, onOrderChange }) {
+export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSelect, onExit, onOrderChange }) {
   let items = [];
   let activeId = null;
   // Card and heading positions in content pixels, laid out once per scene list.
   let layout = { entries: [], height: 0 };
   let scroll = 0;
   let sort = savedSort();
-  let filter = savedFilter();
   let sortMenuOpen = false;
-  let shownCount = 0;
   let scrollStick = 0;
   let fling = 0;
   let panelStale = false;
@@ -195,10 +138,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
   let loaderKey = '';
   let loaderDrawnAt = 0;
   let loaderErrorTimer = null;
-  let raterShown = false;
-  let raterStale = false;
-  let raterHideAt = 0;
-  let raterRated = false;
   // { value, min, max } of the depth stretch, and until when the card shows it.
   let distanceState = null;
   let distanceUntil = 0;
@@ -244,9 +183,8 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
   // Back to front: layers later in the list cover earlier ones.
   const panel = surface(PANEL_CANVAS, PANEL);
   const loader = surface(LOADER_CANVAS, LOADER);
-  const rater = surface(RATER_CANVAS, RATER);
   const distanceCard = surface(DISTANCE_CANVAS, DISTANCE);
-  const surfaces = [panel, loader, rater, distanceCard];
+  const surfaces = [panel, loader, distanceCard];
 
   const highlight = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
@@ -323,12 +261,10 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     } catch {}
   }
 
-  // Folders in the order they come, scenes of the chosen star class sorted within each.
+  // Folders in the order they come, scenes sorted within each.
   function layoutScenes() {
     const folders = new Map();
-    const shown = items.filter((item) => passesFilter(item, filter));
-    shownCount = shown.length;
-    for (const item of shown) {
+    for (const item of items) {
       const group = folderOf(item);
       if (!folders.has(group)) folders.set(group, []);
       folders.get(group).push(item);
@@ -402,11 +338,7 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     const titleWidth = context.measureText('Scenes').width;
     context.fillStyle = '#8a8a8a';
     context.font = '32px ui-monospace, monospace';
-    context.fillText(filter === 'all' ? `${items.length} ${items.length === 1 ? 'scene' : 'scenes'}` : `${shownCount} of ${items.length} scenes`,
-      MARGIN + titleWidth + 32, ROW_1.y + ROW_1.height / 2 + 4);
-    for (const button of FILTER_BUTTONS) {
-      drawButton(context, { ...button, label: button.option.label, stars: button.option.stars }, button.key === filter);
-    }
+    context.fillText(`${items.length} ${items.length === 1 ? 'scene' : 'scenes'}`, MARGIN + titleWidth + 32, ROW_1.y + ROW_1.height / 2 + 4);
     drawButton(context, EXIT_BUTTON);
     drawButton(context, CLOSE_BUTTON);
 
@@ -434,7 +366,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
         drawPlaceholder(context, x, y, CARD_WIDTH, THUMB_HEIGHT);
         if (preview && !preview.failed) pending.push(preview.ready);
       }
-      if (canRate(item)) drawCardStars(context, x, y, item.rating ?? 0);
       context.fillStyle = active ? '#fff' : '#d4d4d4';
       context.font = '32px system-ui, sans-serif';
       context.fillText(fitText(context, item.name, CARD_WIDTH - 40), x + 20, y + THUMB_HEIGHT + (CARD_HEIGHT - THUMB_HEIGHT) / 2);
@@ -448,8 +379,7 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
       context.fillStyle = '#929292';
       context.font = '36px system-ui, sans-serif';
       context.textAlign = 'center';
-      context.fillText(items.length ? `There are no ${filterLabel(filter)} yet.` : 'The scene folder has no splat files yet.',
-        CONTENT.x + CONTENT.width / 2, CONTENT.y + 140);
+      context.fillText('The scene folder has no splat files yet.', CONTENT.x + CONTENT.width / 2, CONTENT.y + 140);
       context.textAlign = 'left';
     }
     context.restore();
@@ -475,19 +405,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     // Redraw when the visible thumbnails are in, and start fetching the ones just below meanwhile.
     if (pending.length) Promise.all(pending).then(() => { panelStale = true; });
     for (const entry of visibleEntries(CONTENT.height)) if (entry.item) previewFor(entry.item);
-  }
-
-  // A dark strip behind the stars keeps them readable on any picture; unrated scenes show outlines.
-  function drawCardStars(context, x, y, rating) {
-    const first = cardStar(x, y, 1);
-    context.fillStyle = '#000000a0';
-    context.beginPath();
-    context.roundRect(first.x - 6, first.y, MAX_RATING * CARD_STAR.width + 12, CARD_STAR.height, CARD_STAR.height / 2);
-    context.fill();
-    for (let value = 1; value <= MAX_RATING; value += 1) {
-      const star = cardStar(x, y, value);
-      drawStar(context, star.x + star.width / 2, star.y + star.height / 2, 21, value <= rating, value <= rating ? STAR_COLOR : '#ffffffb0');
-    }
   }
 
   // The sort button, and the list of orders under it while it is open.
@@ -530,55 +447,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
       context.fillStyle = chosen ? '#fff' : '#d4d4d4';
       context.font = '34px system-ui, sans-serif';
       context.fillText(entry.option.label, entry.x + 32, entry.y + entry.height / 2);
-    }
-  }
-
-  const activeItem = () => items.find((item) => item.id === activeId) ?? null;
-
-  function drawRater() {
-    const { context } = rater;
-    const { width, height } = RATER_CANVAS;
-    const item = activeItem();
-    const rating = item?.rating ?? 0;
-    context.fillStyle = '#181818';
-    context.fillRect(0, 0, width, height);
-    context.strokeStyle = '#ffffff26';
-    context.lineWidth = 3;
-    context.strokeRect(1.5, 1.5, width - 3, height - 3);
-    context.textBaseline = 'middle';
-    context.fillStyle = ACCENT;
-    context.font = '600 22px system-ui, sans-serif';
-    context.letterSpacing = '3px';
-    context.fillText('RATE THIS SCENE', 40, 50);
-    context.letterSpacing = '0px';
-    context.fillStyle = '#f4f4f4';
-    context.font = '600 38px system-ui, sans-serif';
-    context.fillText(fitText(context, item?.name ?? '', width - 80), 40, 100);
-    for (const star of RATER_STARS) {
-      drawStar(context, star.x + star.width / 2, star.y + star.height / 2, 62, star.value <= rating, star.value <= rating ? STAR_COLOR : '#ffffff90');
-    }
-    changed(rater);
-  }
-
-  function setRaterShown(value) {
-    raterShown = value && presenting && !open && !loading && canRate(activeItem());
-    if (raterShown) {
-      raterRated = false;
-      placeInFront(rater.mesh, RATER);
-      raterHideAt = performance.now() + RATER_IDLE_MS;
-      drawRater();
-    }
-  }
-
-  function updateRater(now) {
-    if (raterShown && (now > raterHideAt || open || loading || !canRate(activeItem()))) raterShown = false;
-    if (rater.mesh.visible !== raterShown) {
-      rater.mesh.visible = raterShown;
-      showNativeLayers();
-    }
-    if (raterShown && raterStale) {
-      raterStale = false;
-      drawRater();
     }
   }
 
@@ -860,8 +728,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     if (inside(CLOSE_BUTTON, x, y)) return CLOSE_BUTTON;
     if (inside(EXIT_BUTTON, x, y)) return EXIT_BUTTON;
     if (inside(SORT_BUTTON, x, y)) return SORT_BUTTON;
-    const filterButton = FILTER_BUTTONS.find((button) => inside(button, x, y));
-    if (filterButton) return filterButton;
     if (inside(SCROLLBAR_HIT, x, y)) return scrollbarRegion();
     if (!inside(CONTENT, x, y)) return null;
     const contentY = y - CONTENT.y + scroll;
@@ -875,12 +741,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
       return bottom > top ? { ...rect, y: top, height: bottom - top } : null;
     };
     const cardY = CONTENT.y + entry.y - scroll;
-    if (canRate(entry.item)) {
-      for (let value = 1; value <= MAX_RATING; value += 1) {
-        const star = clip(cardStar(entry.x, cardY, value));
-        if (star && inside(star, x, y)) return { ...star, action: 'rate', item: entry.item, value };
-      }
-    }
     return { ...clip({ x: entry.x, y: cardY, width: CARD_WIDTH, height: CARD_HEIGHT }), action: 'scene', item: entry.item };
   }
 
@@ -905,8 +765,8 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     return (0.5 - planePoint.y / panel.size.height) * panel.canvas.height;
   }
 
-  // The surface the pointers work on: the browser while it is open, else the rating card while it shows.
-  const pointedSurface = () => (open ? panel : raterShown ? rater : null);
+  // The surface the pointers work on: the browser while it is open.
+  const pointedSurface = () => (open ? panel : null);
 
   function hitFor(controller) {
     const target = pointedSurface();
@@ -917,10 +777,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     if (!hit) return null;
     const x = hit.uv.x * target.canvas.width;
     const y = (1 - hit.uv.y) * target.canvas.height;
-    if (target === rater) {
-      const star = RATER_STARS.find((candidate) => inside(candidate, x, y));
-      return { hit, region: star ? { ...star, item: activeItem() } : null, x, y, inContent: false };
-    }
     return { hit, region: regionAt(x, y), x, y, inContent: !sortMenuOpen && inside(CONTENT, x, y) };
   }
 
@@ -964,11 +820,9 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     if (open === value || (value && !presenting)) return;
     open = value;
     if (open) {
-      raterShown = false;
       placeInFront(panel.mesh, PANEL);
       // The grid page may have changed the order meanwhile.
       sort = savedSort();
-      filter = savedFilter();
       sortMenuOpen = false;
       layoutScenes();
       fling = 0;
@@ -993,22 +847,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
       scroll = 0;
       panelStale = true;
       onOrderChange?.();
-    } else if (region.action === 'filter') {
-      filter = saveFilter(region.key);
-      layoutScenes();
-      fling = 0;
-      scrollToActive();
-      panelStale = true;
-      onOrderChange?.();
-    } else if (region.action === 'rate') {
-      // The card stays where it is until the list is laid out again, even if it leaves the star class shown.
-      onRate(region.item, region.item.rating === region.value ? 0 : region.value);
-      panelStale = true;
-      raterStale = true;
-      if (raterShown) {
-        raterRated = true;
-        raterHideAt = performance.now() + RATER_AFTER_RATING_MS;
-      }
     } else if (region.action === 'exit') {
       setOpen(false);
       onExit();
@@ -1021,10 +859,10 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
 
   // Trigger down starts a press; released without much movement it clicks what it started on, moved
   // over the list it drags the list along and leaves it gliding.
-  function handlePress(pointer, found, seconds, now) {
+  function handlePress(pointer, found, seconds) {
     if (pointer.pressStarted) {
       pointer.pressStarted = false;
-      pointer.press = { found, startY: found?.y, startScroll: scroll, dragging: false, velocity: 0, startedAt: now };
+      pointer.press = { found, startY: found?.y, startScroll: scroll, dragging: false, velocity: 0 };
       if (found?.inContent) fling = 0;
       // Grabbed on the thumb it keeps that hold; elsewhere on the strip the thumb jumps under the pointer.
       if (found?.region?.action === 'scrollbar') {
@@ -1076,10 +914,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
       panelStale = true;
     } else if (open && !target) {
       setOpen(false);
-    } else if (raterShown && !target) {
-      raterShown = false;
-    } else if (!open && !raterShown && pointer.source?.handedness !== 'left' && now - press.startedAt < RATER_CLICK_MS) {
-      setRaterShown(true);
     }
   }
 
@@ -1119,17 +953,14 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
       if (found?.region && !pointer.press?.dragging) hovered = found.region;
       // A held scrollbar stays lit wherever the ray goes.
       if (pointer.press?.scrollbar) hovered = scrollbarRegion();
-      // Pointing at the rating card keeps it up until a rating is given.
-      if (found && raterShown && !raterRated) raterHideAt = Math.max(raterHideAt, now + RATER_IDLE_MS);
       // A short tick in the hand whenever the pointer moves onto something new.
       const region = found?.region;
       const target = region ? `${region.action}|${region.item?.id ?? ''}|${region.key ?? ''}|${region.value ?? ''}` : null;
       if (target && target !== pointer.target && !pointer.press?.dragging) pulse(pointer, 0.25, 12);
       pointer.target = target;
-      handlePress(pointer, found, seconds, now);
+      handlePress(pointer, found, seconds);
     }
     updateScroll(seconds);
-    updateRater(now);
     showHighlight(pointedSurface(), hovered);
     updateLoader(now);
     updateDistance(now);
@@ -1139,11 +970,8 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
   return {
     get isOpen() { return open; },
     setScenes(list, id) {
-      // Another scene in view: its rating card would show the wrong scene.
-      if (id !== activeId) raterShown = false;
       items = list;
       activeId = id;
-      raterStale = true;
       layoutScenes();
       setScroll(scroll);
       panelStale = true;
@@ -1152,11 +980,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     showDistance(value, min, max) {
       distanceState = { value, min, max };
       distanceUntil = performance.now() + DISTANCE_SHOW_MS;
-    },
-    // Draws the panel again, after a scene's rating changed from outside.
-    redraw() {
-      panelStale = true;
-      raterStale = true;
     },
     // Right stick while the browser is open: -1 (down) to 1 (up), 0 at rest.
     setScrollStick(value) {
@@ -1173,8 +996,6 @@ export function createVrSceneBrowser({ renderer, scene, rig, onOpenChange, onSel
     setPresenting(value) {
       presenting = value;
       if (!presenting) setOpen(false);
-      raterShown = false;
-      rater.mesh.visible = false;
       distanceUntil = 0;
       distanceCard.mesh.visible = false;
       loader.mesh.visible = false;

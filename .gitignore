@@ -5,3 +5,9 @@ scenes/*
 settings.json
 certs/
 thumbnails/
+
+# Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+ratings/

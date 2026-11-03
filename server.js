@@ -4,7 +4,7 @@ import { readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { execFile, spawn } from 'node:child_process';
-import { homedir, networkInterfaces } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -16,9 +16,15 @@ const dist = join(root, 'dist');
 const settingsFile = join(root, 'settings.json');
 const thumbnails = join(root, 'thumbnails');
 const maxThumbnailBytes = 1 << 20;
-// Star ratings live next to the scenes, so they move with the folder. Hidden, like the folder's other dot files.
-const ratingsName = '.viewer-ratings.json';
-const maxRating = 3;
+// Ratings stay with the viewer on each computer: this computer's own, and the files imported from the
+// others, each under the name of the person who rated, given when it is imported.
+const ratingsFolder = join(root, 'ratings');
+const ownRatingsFile = join(ratingsFolder, 'mine.json');
+const importedRatingsFile = join(ratingsFolder, 'imported.json');
+const ratingsFormat = 'gaussian-viewer-ratings';
+const maxStars = 5;
+const maxComment = 5000;
+const maxRatingsImport = 10 << 20;
 const splatExtensions = new Set(['.ply', '.spz', '.splat', '.ksplat']);
 const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
 const contentTypes = {
@@ -127,17 +133,61 @@ function sceneFile(id) {
   return inside(scenesRoot, path) && splatExtensions.has(extname(path).toLowerCase()) && stats?.isFile() ? { path, stats } : null;
 }
 
-function ratingsFile() {
-  return join(scenesRoot, ratingsName);
+const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+function readJson(path, fallback) {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    return isObject(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-// Scene id → 1 to 3 stars; unrated scenes are left out.
-function readRatings() {
+function writeJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// { stars: 0 to 5, or null when not given; comment; distance: the factor the slider shows, or null; updatedAt },
+// or null when the value is no rating or holds nothing.
+function cleanRating(value) {
+  if (!isObject(value)) return null;
+  const stars = Number.isInteger(value.stars) && value.stars >= 0 && value.stars <= maxStars ? value.stars : null;
+  const comment = typeof value.comment === 'string' ? value.comment.slice(0, maxComment) : '';
+  const distance = Number.isFinite(value.distance) && value.distance > 0 && value.distance < 100
+    ? Math.round(value.distance * 100) / 100 : null;
+  if (stars === null && !comment.trim() && distance === null) return null;
+  return { stars, comment, distance, updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now() };
+}
+
+// Scene id → rating, leaving out whatever is not one.
+function cleanRatings(ratings) {
+  const clean = {};
+  if (!isObject(ratings)) return clean;
+  for (const [id, value] of Object.entries(ratings)) {
+    const rating = cleanRating(value);
+    if (id && rating) clean[id] = rating;
+  }
+  return clean;
+}
+
+const readOwnRatings = () => cleanRatings(readJson(ownRatingsFile, {}));
+
+// Name → { importedAt, computer, ratings }.
+function readImportedRatings() {
+  const imported = {};
+  for (const [name, entry] of Object.entries(readJson(importedRatingsFile, {}))) {
+    if (isObject(entry)) imported[name] = { importedAt: entry.importedAt ?? 0, computer: entry.computer ?? '', ratings: cleanRatings(entry.ratings) };
+  }
+  return imported;
+}
+
+async function readJsonBody(request, limit) {
   try {
-    const ratings = JSON.parse(readFileSync(ratingsFile(), 'utf8'));
-    return ratings && typeof ratings === 'object' && !Array.isArray(ratings) ? ratings : {};
+    return JSON.parse((await readBody(request, limit)).toString('utf8'));
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -158,7 +208,7 @@ function fileUrl(path) {
   return `/files/${relative(scenesRoot, path).split(sep).map(encodeURIComponent).join('/')}`;
 }
 
-async function readFolder(folder, ratings) {
+async function readFolder(folder) {
   let entries;
   try {
     entries = await readdir(folder, { withFileTypes: true });
@@ -173,7 +223,7 @@ async function readFolder(folder, ratings) {
   for (const entry of entries) {
     const path = join(folder, entry.name);
     if (entry.isDirectory()) {
-      const child = await readFolder(path, ratings);
+      const child = await readFolder(path);
       if (child.folders.length || child.scenes.length) folders.push(child);
       continue;
     }
@@ -196,7 +246,6 @@ async function readFolder(folder, ratings) {
       fileName: entry.name,
       imageUrl: imageName ? fileUrl(join(folder, imageName)) : null,
       thumbUrl: existsSync(join(thumbnails, thumbnail)) ? `/thumbnails/${thumbnail}` : null,
-      rating: Number.isInteger(ratings[id]) && ratings[id] >= 1 && ratings[id] <= maxRating ? ratings[id] : 0,
     });
   }
   return { name: basename(folder), path: relative(scenesRoot, folder).split(sep).join('/'), folders, scenes };
@@ -208,7 +257,7 @@ async function readLibrary(request) {
     exists: existsSync(scenesRoot),
     canChooseFolder: fromThisComputer(request),
     debug,
-    tree: await readFolder(scenesRoot, readRatings()),
+    tree: await readFolder(scenesRoot),
   };
 }
 
@@ -294,33 +343,8 @@ async function handleRequest(request, response) {
     sendJson(response, 200, { thumbUrl: `/thumbnails/${name}` });
     return;
   }
-  // Body: { rating: 0 to 3 }, 0 clears it. Headsets rate too, so this is open to the network like the scenes.
-  if (path === '/api/rating' && request.method === 'POST') {
-    const id = new URL(request.url, 'http://localhost').searchParams.get('scene') || '';
-    if (!sceneFile(id)) {
-      sendJson(response, 404, { error: 'Scene not found' });
-      return;
-    }
-    let rating;
-    try {
-      ({ rating } = JSON.parse((await readBody(request, 1024)).toString('utf8')));
-    } catch {
-      rating = null;
-    }
-    if (!Number.isInteger(rating) || rating < 0 || rating > maxRating) {
-      sendJson(response, 400, { error: `The rating must be a whole number from 0 to ${maxRating}.` });
-      return;
-    }
-    const ratings = readRatings();
-    if (rating) ratings[id] = rating;
-    else delete ratings[id];
-    try {
-      writeFileSync(ratingsFile(), `${JSON.stringify(ratings, null, 2)}\n`);
-    } catch (error) {
-      sendJson(response, 500, { error: `Could not save the rating: ${error.message}` });
-      return;
-    }
-    sendJson(response, 200, { rating });
+  if (path.startsWith('/api/ratings')) {
+    await handleRatings(path, request, response);
     return;
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -346,6 +370,80 @@ async function handleRequest(request, response) {
   const target = resolve(dist, `.${path === '/' ? '/index.html' : path}`);
   if (inside(dist, target)) sendFile(response, target, path.startsWith('/assets/') ? 'max-age=31536000, immutable' : 'no-cache');
   else sendJson(response, 404, { error: 'File not found' });
+}
+
+// GET /api/ratings: this computer's ratings and the imported ones.
+// POST /api/ratings?scene=id, body a rating: this computer's rating of the scene; one with nothing in it clears it.
+// GET /api/ratings/export: this computer's ratings as a file, for importing on another one.
+// POST /api/ratings/import, body { name, file }: keeps the ratings of an exported file under the rater's name,
+// in place of earlier ones under that name. POST /api/ratings/remove, body { name }: drops them again.
+// Rating is open to the network like the scenes; importing only works on the computer running the viewer.
+async function handleRatings(path, request, response) {
+  const local = fromThisComputer(request);
+  try {
+    if (path === '/api/ratings' && request.method === 'GET') {
+      const imported = Object.entries(readImportedRatings()).map(([name, entry]) => ({ name, ...entry }))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+      sendJson(response, 200, { mine: readOwnRatings(), imported, canImport: local });
+    } else if (path === '/api/ratings' && request.method === 'POST') {
+      const id = new URL(request.url, 'http://localhost').searchParams.get('scene') || '';
+      if (!sceneFile(id)) {
+        sendJson(response, 404, { error: 'Scene not found' });
+        return;
+      }
+      const body = await readJsonBody(request, 64 * 1024);
+      if (!isObject(body)) {
+        sendJson(response, 400, { error: 'The rating could not be read.' });
+        return;
+      }
+      const rating = cleanRating(body);
+      const ratings = readOwnRatings();
+      if (rating) ratings[id] = rating;
+      else delete ratings[id];
+      writeJson(ownRatingsFile, ratings);
+      sendJson(response, 200, { rating });
+    } else if (path === '/api/ratings/export' && request.method === 'GET') {
+      const exportedAt = new Date();
+      const computer = hostname();
+      const body = JSON.stringify({ format: ratingsFormat, version: 1, computer, exportedAt: exportedAt.toISOString(), ratings: readOwnRatings() }, null, 2);
+      const stamp = exportedAt.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      response.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body),
+        'Content-Disposition': `attachment; filename="ratings-${computer.replace(/[^\w-]+/g, '_')}-${stamp}.json"`,
+        'Cache-Control': 'no-store',
+      });
+      response.end(body);
+    } else if ((path === '/api/ratings/import' || path === '/api/ratings/remove') && request.method === 'POST') {
+      if (!local) {
+        sendJson(response, 403, { error: 'Ratings can only be imported on the computer running the viewer.' });
+        return;
+      }
+      const body = await readJsonBody(request, maxRatingsImport);
+      const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 100) : '';
+      if (!name) {
+        sendJson(response, 400, { error: 'Give the name of the person who rated.' });
+        return;
+      }
+      const imported = readImportedRatings();
+      if (path === '/api/ratings/remove') {
+        delete imported[name];
+      } else {
+        const { file } = body;
+        if (!isObject(file) || file.format !== ratingsFormat || !isObject(file.ratings)) {
+          sendJson(response, 400, { error: 'This is not a ratings file exported from the viewer.' });
+          return;
+        }
+        imported[name] = { importedAt: Date.now(), computer: typeof file.computer === 'string' ? file.computer : '', ratings: cleanRatings(file.ratings) };
+      }
+      writeJson(importedRatingsFile, imported);
+      sendJson(response, 200, { name, count: Object.keys(imported[name]?.ratings ?? {}).length });
+    } else {
+      sendJson(response, 405, { error: 'Method not allowed' });
+    }
+  } catch (error) {
+    sendJson(response, 500, { error: `Could not save the ratings: ${error.message}` });
+  }
 }
 
 const server = createServer(handleRequest);
